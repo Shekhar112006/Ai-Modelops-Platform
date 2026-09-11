@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+*.log
+
+models/*
+!models/.gitkeep
+
+ml/data/raw/*
+ml/data/processed/*
