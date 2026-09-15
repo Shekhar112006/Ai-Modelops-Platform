@@ -15,6 +15,10 @@ from ml.workloads.demo.dataset import (
     TARGET_COLUMN,
     generate_dataset,
 )
+import mlflow
+import mlflow.sklearn
+
+from ml.tracking.mlflow_tracker import configure_tracking
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -51,73 +55,109 @@ def build_model() -> Pipeline:
 
 
 def train() -> dict[str, object]:
-    """Run the complete Model V1 training workflow."""
+    """Run the complete Model V1 training workflow with MLflow tracking."""
 
-    print("=" * 60)
-    print("AI ModelOps Platform - Model V1 Training")
-    print("=" * 60)
+    configure_tracking()
 
-    print("\n[1/5] Generating dataset...")
-    dataset = generate_dataset(RAW_DATA_PATH)
+    with mlflow.start_run() as run:
+        print("=" * 60)
+        print("AI ModelOps Platform - Model V1 Training")
+        print("=" * 60)
 
-    print(f"Dataset shape: {dataset.shape}")
+        print("\n[1/6] Generating dataset...")
+        dataset = generate_dataset(RAW_DATA_PATH)
 
-    print("\n[2/5] Splitting dataset...")
-    split = split_dataset(
-        dataset=dataset,
-        target_column=TARGET_COLUMN,
-    )
+        print(f"Dataset shape: {dataset.shape}")
 
-    print(f"Training samples: {len(split.X_train)}")
-    print(f"Testing samples:  {len(split.X_test)}")
+        print("\n[2/6] Splitting dataset...")
+        split = split_dataset(
+            dataset=dataset,
+            target_column=TARGET_COLUMN,
+        )
 
-    print("\n[3/5] Building model...")
-    model = build_model()
+        print(f"Training samples: {len(split.X_train)}")
+        print(f"Testing samples:  {len(split.X_test)}")
 
-    print("\n[4/5] Training...")
-    model.fit(split.X_train, split.y_train)
+        print("\n[3/6] Building model...")
 
-    print("\n[5/5] Evaluating...")
-    metrics = evaluate_classifier(
-        model=model,
-        X_test=split.X_test,
-        y_test=split.y_test,
-    )
+        model = build_model()
 
-    MODEL_DIR.mkdir(parents=True, exist_ok=True)
+        mlflow.log_params(
+            {
+                "algorithm": "LogisticRegression",
+                "test_size": 0.2,
+                "random_state": 42,
+                "max_iter": 1000,
+                "dataset_version": "D1",
+            }
+        )
 
-    dump(model, MODEL_PATH)
+        print("\n[4/6] Training...")
+        model.fit(split.X_train, split.y_train)
 
-    metadata = {
-        "model_name": "demo-classifier",
-        "model_version": "v1",
-        "dataset": "demo_dataset.csv",
-        "dataset_version": "D1",
-        "algorithm": "LogisticRegression",
-        "random_state": 42,
-        "metrics": metrics,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
+        print("\n[5/6] Evaluating...")
 
-    METADATA_PATH.write_text(
-        json.dumps(metadata, indent=2),
-        encoding="utf-8",
-    )
+        metrics = evaluate_classifier(
+            model=model,
+            X_test=split.X_test,
+            y_test=split.y_test,
+        )
 
-    print("\n" + "=" * 60)
-    print("MODEL RESULTS")
-    print("=" * 60)
+        mlflow.log_metrics(metrics)
 
-    for metric_name, value in metrics.items():
-        print(f"{metric_name:10s}: {value:.4f}")
+        print("\n[6/6] Logging model to MLflow...")
 
-    print("\nModel saved to:")
-    print(MODEL_PATH)
+        mlflow.sklearn.log_model(
+            sk_model=model,
+            name="demo-classifier",
+        )
 
-    print("\nMetadata saved to:")
-    print(METADATA_PATH)
+        mlflow.set_tags(
+            {
+                "model_version": "v1",
+                "workload": "demo-classification",
+                "dataset_version": "D1",
+                "pipeline_version": "v1",
+            }
+        )
 
-    return metadata
+        MODEL_DIR.mkdir(parents=True, exist_ok=True)
+
+        dump(model, MODEL_PATH)
+
+        metadata = {
+            "model_name": "demo-classifier",
+            "model_version": "v1",
+            "dataset": "demo_dataset.csv",
+            "dataset_version": "D1",
+            "algorithm": "LogisticRegression",
+            "random_state": 42,
+            "metrics": metrics,
+            "mlflow_run_id": run.info.run_id,
+        }
+
+        METADATA_PATH.write_text(
+            json.dumps(metadata, indent=2),
+            encoding="utf-8",
+        )
+
+        print("\n" + "=" * 60)
+        print("MODEL RESULTS")
+        print("=" * 60)
+
+        for metric_name, value in metrics.items():
+            print(f"{metric_name:10s}: {value:.4f}")
+
+        print("\nMLflow Run ID:")
+        print(run.info.run_id)
+
+        print("\nModel saved to:")
+        print(MODEL_PATH)
+
+        print("\nMetadata saved to:")
+        print(METADATA_PATH)
+
+        return metadata
 
 
 if __name__ == "__main__":
