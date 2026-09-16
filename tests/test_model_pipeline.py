@@ -7,6 +7,7 @@ from ml.workloads.demo.dataset import (
     generate_dataset,
 )
 from ml.training.train import build_model
+from ml.training.candidates import get_model_candidates
 
 
 def test_dataset_generation(tmp_path: Path) -> None:
@@ -52,3 +53,26 @@ def test_training_pipeline() -> None:
 
     assert metrics["accuracy"] >= 0.80
     assert metrics["f1"] >= 0.80
+
+def test_model_candidates() -> None:
+    """All configured candidates should build successfully."""
+
+    candidates = get_model_candidates()
+
+    assert len(candidates) == 3
+
+    candidate_names = {
+        candidate.name
+        for candidate in candidates
+    }
+
+    assert candidate_names == {
+        "logistic_regression",
+        "random_forest",
+        "gradient_boosting",
+    }
+
+    for candidate in candidates:
+        model = candidate.build()
+        assert hasattr(model, "fit")
+        assert hasattr(model, "predict")
