@@ -17,6 +17,7 @@ def test_quality_gate_rejects_weak_model() -> None:
         {
             "candidate": "weak-model",
             "run_id": "run-1",
+            "model_id": "model-1",
             "f1": 0.86,
             "roc_auc": 0.92,
         }
@@ -42,6 +43,7 @@ def test_quality_gate_accepts_good_model() -> None:
         {
             "candidate": "good-model",
             "run_id": "run-2",
+            "model_id": "model-2",
             "f1": 0.93,
             "roc_auc": 0.95,
         }
@@ -64,25 +66,28 @@ def test_selector_chooses_best_eligible_model() -> None:
     )
 
     candidates = [
-        {
-            "candidate": "model-a",
-            "run_id": "run-a",
-            "f1": 0.88,
-            "roc_auc": 0.95,
-        },
-        {
-            "candidate": "model-b",
-            "run_id": "run-b",
-            "f1": 0.91,
-            "roc_auc": 0.93,
-        },
-        {
-            "candidate": "model-c",
-            "run_id": "run-c",
-            "f1": 0.94,
-            "roc_auc": 0.96,
-        },
-    ]
+            {
+                "candidate": "model-a",
+                "run_id": "run-a",
+                "model_id": "model-a-id",
+                "f1": 0.88,
+                "roc_auc": 0.95,
+            },
+            {
+                "candidate": "model-b",
+                "run_id": "run-b",
+                "model_id": "model-b-id",
+                "f1": 0.91,
+                "roc_auc": 0.93,
+            },
+            {
+                "candidate": "model-c",
+                "run_id": "run-c",
+                "model_id": "model-c-id",
+                "f1": 0.94,
+                "roc_auc": 0.96,
+            },
+        ]
 
     evaluations = evaluate_candidates(
         candidates=candidates,

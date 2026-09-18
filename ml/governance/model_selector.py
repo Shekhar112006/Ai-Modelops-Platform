@@ -11,13 +11,13 @@ from ml.governance.quality_gate import (
 
 @dataclass(frozen=True)
 class CandidateEvaluation:
-    """Candidate model together with its quality-gate result."""
+    """Candidate model together with its tracking and quality information."""
 
     candidate: str
     run_id: str
+    model_id: str
     metrics: dict[str, float]
     quality: QualityResult
-
 
 def evaluate_candidates(
     candidates: list[dict[str, object]],
@@ -49,6 +49,7 @@ def evaluate_candidates(
             CandidateEvaluation(
                 candidate=str(candidate["candidate"]),
                 run_id=str(candidate["run_id"]),
+                model_id=str(candidate["model_id"]),
                 metrics=metrics,
                 quality=quality,
             )

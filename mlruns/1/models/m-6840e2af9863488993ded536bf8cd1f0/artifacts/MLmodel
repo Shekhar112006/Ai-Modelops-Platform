@@ -1,0 +1,23 @@
+artifact_path: /home/shekhar/ai-modelops-platform/mlruns/1/models/m-6840e2af9863488993ded536bf8cd1f0/artifacts
+flavors:
+  python_function:
+    env:
+      conda: conda.yaml
+      virtualenv: python_env.yaml
+    loader_module: mlflow.sklearn
+    model_path: model.skops
+    predict_fn: predict
+    python_version: 3.14.4
+  sklearn:
+    code: null
+    pickled_model: model.skops
+    serialization_format: skops
+    sklearn_version: 1.9.1
+    skops_trusted_types: null
+mlflow_version: 3.16.0
+model_id: m-6840e2af9863488993ded536bf8cd1f0
+model_size_bytes: 9331686
+model_uuid: m-6840e2af9863488993ded536bf8cd1f0
+prompts: null
+run_id: 116e765132b54f6fae5903badf46d5a5
+utc_time_created: '2026-09-18 17:28:52.954035'

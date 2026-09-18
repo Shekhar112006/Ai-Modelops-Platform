@@ -115,7 +115,7 @@ def train_candidates() -> list[dict[str, object]]:
                 }
             )
 
-            mlflow.sklearn.log_model(
+            model_info = mlflow.sklearn.log_model(
                 sk_model=model,
                 name="model",
             )
@@ -129,6 +129,7 @@ def train_candidates() -> list[dict[str, object]]:
             metadata = {
                 "candidate": candidate.name,
                 "run_id": run.info.run_id,
+                "model_id": model_info.model_id,
                 "metrics": metrics,
                 "dataset_version": "D1",
                 "created_at": datetime.now(
@@ -149,6 +150,7 @@ def train_candidates() -> list[dict[str, object]]:
             result = {
                 "candidate": candidate.name,
                 "run_id": run.info.run_id,
+                "model_id": model_info.model_id,
                 **metrics,
             }
 
