@@ -12,7 +12,7 @@ from ml.registry.model_registry import (
 from ml.training.train_candidates import train_candidates
 
 
-def run_model_selection_pipeline() -> None:
+def run_model_selection_pipeline() -> dict[str,object]:
     """Train candidates, apply the quality gate, and register the winner."""
 
     print("=" * 70)
@@ -81,6 +81,13 @@ def run_model_selection_pipeline() -> None:
 
     print("\nLifecycle status: candidate")
     print("Candidate alias assigned successfully.")
+    return {
+        "model_name": str(model_version.name),
+        "model_version": str(model_version.version),
+        "model_id": selected.model_id,
+        "candidate": selected.candidate,
+        "metrics": selected.metrics,
+    }
 
 
 if __name__ == "__main__":

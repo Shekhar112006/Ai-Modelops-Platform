@@ -10,6 +10,8 @@ class Settings(BaseSettings):
     environment: str = "development"
 
     database_url: str
+    redis_url: str
+    celery_result_backend: str
 
     api_prefix: str = "/api/v1"
 

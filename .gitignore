@@ -9,3 +9,7 @@ models/*
 
 ml/data/raw/*
 ml/data/processed/*
+
+# Local MLflow runtime data
+mlflow.db
+mlruns/

@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from backend.app.api import health, projects
+from backend.app.api import (health, projects ,training,)
 from backend.app.core.config import settings
 from backend.app.db.session import engine
 
@@ -36,6 +36,11 @@ app.include_router(
     tags=["projects"],
 )
 
+app.include_router(
+    training.router,
+    prefix="/api/v1",
+    tags=["training"],
+)
 
 @app.get("/")
 async def root() -> dict[str, str]:

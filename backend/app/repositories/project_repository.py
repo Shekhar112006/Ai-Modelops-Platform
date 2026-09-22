@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-
+from uuid import UUID
 from backend.app.models.project import Project
 
 
@@ -22,6 +22,7 @@ class ProjectRepository:
         await session.refresh(project)
 
         return project
+    
 
     async def list(
         self,
@@ -36,3 +37,18 @@ class ProjectRepository:
         )
 
         return list(result.scalars().all())
+
+    async def get_by_id(
+        self,
+        session: AsyncSession,
+        project_id: UUID,
+    ) -> Project | None:
+        """Fetch a project by its ID."""
+
+        result = await session.execute(
+            select(Project).where(
+                Project.id == project_id
+            )
+        )
+
+        return result.scalar_one_or_none()
