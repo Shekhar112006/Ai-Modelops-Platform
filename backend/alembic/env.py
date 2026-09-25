@@ -17,6 +17,7 @@ from backend.app.core.config import settings
 from backend.app.db.base import Base
 from backend.app.models.project import Project  # noqa: F401
 from backend.app.models.training_job import TrainingJob  # noqa: F401
+from backend.app.models.deployment import Deployment  # noqa: F401
 
 
 config = context.config
