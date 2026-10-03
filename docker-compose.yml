@@ -32,6 +32,24 @@ services:
       timeout: 5s
       retries: 10
 
+
+  model-server:
+    build:
+      context: .
+      dockerfile: model_server/Dockerfile
+    container_name: modelops-model-server
+    restart: unless-stopped
+    environment:
+      MLFLOW_TRACKING_URI: http://host.docker.internal:5000
+      MODEL_NAME: demo-classifier
+      MODEL_VERSION: "5"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8003:8000"
+    volumes:
+      - ./mlruns:/home/shekhar/ai-modelops-platform/mlruns:ro
+
 volumes:
   modelops-postgres-data:
   modelops-redis-data:

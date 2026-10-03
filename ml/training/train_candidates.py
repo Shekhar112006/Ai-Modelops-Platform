@@ -118,6 +118,9 @@ def train_candidates() -> list[dict[str, object]]:
             model_info = mlflow.sklearn.log_model(
                 sk_model=model,
                 name="model",
+                skops_trusted_types=[
+                    "sklearn.tree._tree.Tree",
+                ],
             )
 
             local_model_path = (

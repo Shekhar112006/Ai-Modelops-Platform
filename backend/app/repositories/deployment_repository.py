@@ -104,3 +104,23 @@ class DeploymentRepository:
             )
             .values(status=status)
         )
+
+    async def update_endpoint(
+        self,
+        session: AsyncSession,
+        deployment_id: UUID,
+        endpoint: str,
+        traffic_percentage: int,
+    ) -> None:
+        """Set the serving endpoint and traffic allocation."""
+
+        await session.execute(
+            update(Deployment)
+            .where(
+                Deployment.id == deployment_id
+            )
+            .values(
+                model_endpoint=endpoint,
+                traffic_percentage=traffic_percentage,
+            )
+        )

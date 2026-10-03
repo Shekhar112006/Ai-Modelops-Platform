@@ -1,0 +1,14 @@
+.git
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+.env
+mlflow.db
+mlruns
+models
+tests
+docs
+ml/data
+backend
+worker

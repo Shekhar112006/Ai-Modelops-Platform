@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from backend.app.api import (health, projects ,training,)
+from backend.app.api import (health, projects, training, deployment,)
 from backend.app.core.config import settings
 from backend.app.db.session import engine
 
@@ -40,6 +40,12 @@ app.include_router(
     training.router,
     prefix="/api/v1",
     tags=["training"],
+)
+
+app.include_router(
+    deployment.router,
+    prefix="/api/v1",
+    tags=["deployments"],
 )
 
 @app.get("/")

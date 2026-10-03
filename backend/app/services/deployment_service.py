@@ -188,6 +188,80 @@ class DeploymentService:
 
         return updated_deployment
 
+    async def activate_staging_deployment(
+        self,
+        session: AsyncSession,
+        deployment_id: UUID,
+        endpoint: str,
+    ) -> Deployment:
+        """
+        Move a deployment through the controlled staging lifecycle
+        and attach its model-serving endpoint.
+        """
+
+        if not endpoint.strip():
+            raise ValueError(
+                "Model serving endpoint cannot be empty."
+            )
+
+        deployment = await self.deployment_repository.get_by_id(
+            session,
+            deployment_id,
+        )
+
+        if deployment is None:
+            raise DeploymentNotFoundError(
+                f"Deployment '{deployment_id}' was not found."
+            )
+
+        current_status = DeploymentStatus(
+            deployment.status
+        )
+
+        required_transitions = [
+            DeploymentStatus.VALIDATING,
+            DeploymentStatus.APPROVED,
+            DeploymentStatus.STAGING,
+        ]
+
+        for target_status in required_transitions:
+            validate_deployment_transition(
+                current=current_status,
+                target=target_status,
+            )
+
+            await self.deployment_repository.update_status(
+                session=session,
+                deployment_id=deployment_id,
+                status=target_status.value,
+            )
+
+            current_status = target_status
+
+        await self.deployment_repository.update_endpoint(
+            session=session,
+            deployment_id=deployment_id,
+            endpoint=endpoint,
+            traffic_percentage=100,
+        )
+
+        await session.commit()
+
+        updated_deployment = (
+            await self.deployment_repository.get_by_id(
+                session,
+                deployment_id,
+            )
+        )
+
+        if updated_deployment is None:
+            raise DeploymentNotFoundError(
+                f"Deployment '{deployment_id}' disappeared "
+                "after activation."
+            )
+
+        return updated_deployment
+
     async def get_deployment(
         self,
         session: AsyncSession,
