@@ -59,6 +59,66 @@ class DeploymentRepository:
 
         return list(result.scalars().all())
 
+    async def list_active_by_project(
+        self,
+        session: AsyncSession,
+        project_id: UUID,
+        environment: str,
+    ) -> list[Deployment]:
+        """Return all active deployments for a project environment."""
+
+        result = await session.execute(
+            select(Deployment)
+            .where(
+                Deployment.project_id == project_id,
+                Deployment.environment == environment,
+                Deployment.status.in_(
+                    [
+                        "staging",
+                        "canary",
+                        "promoting",
+                        "production",
+                    ]
+                ),
+            )
+            .order_by(
+                Deployment.created_at.asc()
+            )
+            .with_for_update()
+        )
+
+        return list(result.scalars().all())
+
+    async def list_routable_by_project(
+        self,
+        session: AsyncSession,
+        project_id: UUID,
+        environment: str,
+    ) -> list[Deployment]:
+        """Return active deployments available for request routing."""
+
+        result = await session.execute(
+            select(Deployment)
+            .where(
+                Deployment.project_id == project_id,
+                Deployment.environment == environment,
+                Deployment.status.in_(
+                    [
+                        "staging",
+                        "canary",
+                        "promoting",
+                        "production",
+                    ]
+                ),
+                Deployment.traffic_percentage > 0,
+            )
+            .order_by(
+                Deployment.created_at.asc()
+            )
+        )
+
+        return list(result.scalars().all())
+
     async def get_active_by_project(
         self,
         session: AsyncSession,
@@ -103,6 +163,24 @@ class DeploymentRepository:
                 Deployment.id == deployment_id
             )
             .values(status=status)
+        )
+
+    async def update_environment(
+        self,
+        session: AsyncSession,
+        deployment_id: UUID,
+        environment: str,
+    ) -> None:
+        """Update the environment for a deployment."""
+
+        await session.execute(
+            update(Deployment)
+            .where(
+                Deployment.id == deployment_id
+            )
+            .values(
+                environment=environment,
+            )
         )
 
     async def update_endpoint(

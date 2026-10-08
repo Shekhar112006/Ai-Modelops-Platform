@@ -11,6 +11,10 @@ from model_router.schemas import (
     RouterPredictionRequest,
     RouterPredictionResponse,
 )
+from model_router.selector import (
+    NoRoutableDeploymentError,
+    select_weighted_deployment,
+)
 
 
 deployment_repository = DeploymentRepository()
@@ -38,18 +42,18 @@ async def health() -> dict[str, str]:
 async def predict(
     payload: RouterPredictionRequest,
 ) -> RouterPredictionResponse:
-    """Route a prediction to the active staging deployment."""
+    """Route a prediction using active deployment traffic weights."""
 
     async with AsyncSessionFactory() as session:
-        deployment = (
-            await deployment_repository.get_active_by_project(
+        deployments = (
+            await deployment_repository.list_routable_by_project(
                 session=session,
                 project_id=payload.project_id,
                 environment="staging",
             )
         )
 
-    if deployment is None:
+    if not deployments:
         raise HTTPException(
             status_code=404,
             detail=(
@@ -58,14 +62,22 @@ async def predict(
             ),
         )
 
-    if not deployment.model_endpoint:
+    try:
+        deployment = select_weighted_deployment(
+            deployments
+        )
+
+    except NoRoutableDeploymentError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=str(exc),
+        ) from exc
+
+    except ValueError as exc:
         raise HTTPException(
             status_code=503,
-            detail=(
-                f"Deployment '{deployment.id}' has no "
-                "model serving endpoint."
-            ),
-        )
+            detail=f"Invalid routing configuration: {exc}",
+        ) from exc
 
     client = ModelServerClient(
         base_url=deployment.model_endpoint,

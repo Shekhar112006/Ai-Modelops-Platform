@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.domain.deployment import (
     DeploymentEnvironment,
     DeploymentStatus,
+    validate_canary_traffic,
     validate_deployment_transition,
 )
 from backend.app.models.deployment import Deployment
@@ -187,6 +188,301 @@ class DeploymentService:
             )
 
         return updated_deployment
+
+    async def create_canary_deployment(
+        self,
+        session: AsyncSession,
+        project_id: UUID,
+        model_name: str,
+        model_version: str,
+        environment: DeploymentEnvironment,
+        endpoint: str,
+        canary_percentage: int,
+    ) -> Deployment:
+        """
+        Create a canary deployment and reduce the current stable
+        deployment by the canary traffic percentage.
+        """
+
+        validate_canary_traffic(canary_percentage)
+
+        if not endpoint.strip():
+            raise ValueError(
+                "Model serving endpoint cannot be empty."
+            )
+
+        project = await self.project_repository.get_by_id(
+            session,
+            project_id,
+        )
+
+        if project is None:
+            raise DeploymentProjectNotFoundError(
+                f"Project '{project_id}' was not found."
+            )
+
+        model_version_info = self._get_model_version(
+            model_name=model_name,
+            model_version=model_version,
+        )
+
+        validation_status = model_version_info.tags.get(
+            "validation_status"
+        )
+
+        if validation_status != "passed":
+            raise DeploymentModelNotEligibleError(
+                f"Model '{model_name}' version "
+                f"'{model_version}' is not eligible for deployment. "
+                f"validation_status={validation_status!r}."
+            )
+
+        active_deployments = (
+            await self.deployment_repository.list_active_by_project(
+                session=session,
+                project_id=project_id,
+                environment=environment.value,
+            )
+        )
+
+        if not active_deployments:
+            raise DeploymentNotFoundError(
+                "No active deployment exists to receive "
+                "canary traffic."
+            )
+
+        total_traffic = sum(
+            deployment.traffic_percentage
+            for deployment in active_deployments
+        )
+
+        if total_traffic != 100:
+            raise ValueError(
+                f"Active deployment traffic must total 100%. "
+                f"Current total is {total_traffic}%."
+            )
+
+        stable_candidates = [
+            deployment
+            for deployment in active_deployments
+            if deployment.status
+            in {
+                DeploymentStatus.STAGING.value,
+                DeploymentStatus.PRODUCTION.value,
+            }
+            and deployment.traffic_percentage > 0
+        ]
+
+        if not stable_candidates:
+            raise ValueError(
+                "No stable deployment with traffic was found."
+            )
+
+        stable = max(
+            stable_candidates,
+            key=lambda deployment: deployment.traffic_percentage,
+        )
+
+        if (
+            stable.model_name == model_name
+            and stable.model_version == model_version
+        ):
+            raise ValueError(
+                "Canary model must differ from the stable model."
+            )
+
+        new_stable_percentage = (
+            stable.traffic_percentage
+            - canary_percentage
+        )
+
+        if new_stable_percentage < 1:
+            raise ValueError(
+                "Canary percentage is too large for the "
+                "current stable allocation."
+            )
+
+        deployment = Deployment(
+            project_id=project_id,
+            model_name=model_name,
+            model_version=model_version,
+            environment=environment.value,
+            status=DeploymentStatus.CREATED.value,
+            traffic_percentage=0,
+        )
+
+        deployment = await self.deployment_repository.create(
+            session,
+            deployment,
+        )
+
+        current_status = DeploymentStatus.CREATED
+
+        required_transitions = [
+            DeploymentStatus.VALIDATING,
+            DeploymentStatus.APPROVED,
+            DeploymentStatus.STAGING,
+            DeploymentStatus.CANARY,
+        ]
+
+        for target_status in required_transitions:
+            validate_deployment_transition(
+                current=current_status,
+                target=target_status,
+            )
+
+            await self.deployment_repository.update_status(
+                session=session,
+                deployment_id=deployment.id,
+                status=target_status.value,
+            )
+
+            current_status = target_status
+
+        await self.deployment_repository.update_endpoint(
+            session=session,
+            deployment_id=stable.id,
+            endpoint=stable.model_endpoint or "",
+            traffic_percentage=new_stable_percentage,
+        )
+
+        await self.deployment_repository.update_endpoint(
+            session=session,
+            deployment_id=deployment.id,
+            endpoint=endpoint,
+            traffic_percentage=canary_percentage,
+        )
+
+        await session.commit()
+        await session.refresh(deployment)
+
+        return deployment
+
+    async def promote_canary_deployment(
+        self,
+        session: AsyncSession,
+        deployment_id: UUID,
+    ) -> Deployment:
+        """
+        Promote a canary deployment to production.
+
+        The canary receives 100% traffic while the previous
+        stable deployment remains available with 0% traffic.
+        """
+
+        canary = await self.deployment_repository.get_by_id(
+            session,
+            deployment_id,
+        )
+
+        if canary is None:
+            raise DeploymentNotFoundError(
+                f"Deployment '{deployment_id}' was not found."
+            )
+
+        if canary.status != DeploymentStatus.CANARY.value:
+            raise ValueError(
+                f"Deployment '{deployment_id}' must be in "
+                f"canary state before promotion. "
+                f"Current state={canary.status!r}."
+            )
+
+        active_deployments = (
+            await self.deployment_repository.list_active_by_project(
+                session=session,
+                project_id=canary.project_id,
+                environment=canary.environment,
+            )
+        )
+
+        stable_candidates = [
+            deployment
+            for deployment in active_deployments
+            if deployment.id != canary.id
+            and deployment.traffic_percentage > 0
+            and deployment.status
+            in {
+                DeploymentStatus.STAGING.value,
+                DeploymentStatus.PRODUCTION.value,
+            }
+        ]
+
+        if not stable_candidates:
+            raise ValueError(
+                "No active stable deployment was found "
+                "for canary promotion."
+            )
+
+        total_traffic = sum(
+            deployment.traffic_percentage
+            for deployment in active_deployments
+        )
+
+        if total_traffic != 100:
+            raise ValueError(
+                f"Active deployment traffic must total 100%. "
+                f"Current total is {total_traffic}%."
+            )
+
+        validate_deployment_transition(
+            current=DeploymentStatus.CANARY,
+            target=DeploymentStatus.PROMOTING,
+        )
+
+        await self.deployment_repository.update_status(
+            session=session,
+            deployment_id=canary.id,
+            status=DeploymentStatus.PROMOTING.value,
+        )
+
+        for stable in stable_candidates:
+            await self.deployment_repository.update_endpoint(
+                session=session,
+                deployment_id=stable.id,
+                endpoint=stable.model_endpoint or "",
+                traffic_percentage=0,
+            )
+
+        validate_deployment_transition(
+            current=DeploymentStatus.PROMOTING,
+            target=DeploymentStatus.PRODUCTION,
+        )
+
+        await self.deployment_repository.update_environment(
+            session=session,
+            deployment_id=canary.id,
+            environment=DeploymentEnvironment.PRODUCTION.value,
+        )
+
+        await self.deployment_repository.update_status(
+            session=session,
+            deployment_id=canary.id,
+            status=DeploymentStatus.PRODUCTION.value,
+        )
+
+        await self.deployment_repository.update_endpoint(
+            session=session,
+            deployment_id=canary.id,
+            endpoint=canary.model_endpoint or "",
+            traffic_percentage=100,
+        )
+
+        await session.commit()
+
+        promoted = (
+            await self.deployment_repository.get_by_id(
+                session,
+                canary.id,
+            )
+        )
+
+        if promoted is None:
+            raise DeploymentNotFoundError(
+                f"Deployment '{deployment_id}' disappeared "
+                "after promotion."
+            )
+
+        return promoted
 
     async def activate_staging_deployment(
         self,

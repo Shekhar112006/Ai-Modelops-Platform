@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import StrEnum
 
 
@@ -88,3 +89,59 @@ def validate_deployment_transition(
             f"Invalid deployment transition: "
             f"{current.value} -> {target.value}."
         )
+
+def validate_canary_traffic(
+    traffic_percentage: int,
+) -> None:
+    """Validate the traffic percentage for a canary deployment."""
+
+    if not 1 <= traffic_percentage <= 99:
+        raise ValueError(
+            "Canary traffic percentage must be between "
+            "1 and 99."
+        )
+
+
+
+
+@dataclass(frozen=True)
+class TrafficAllocation:
+    """Traffic split between a stable deployment and a canary."""
+
+    stable_percentage: int
+    canary_percentage: int
+
+    def __post_init__(self) -> None:
+        """Validate the complete traffic allocation."""
+
+        if not 0 <= self.stable_percentage <= 100:
+            raise ValueError(
+                "Stable traffic percentage must be between "
+                "0 and 100."
+            )
+
+        if not 0 <= self.canary_percentage <= 100:
+            raise ValueError(
+                "Canary traffic percentage must be between "
+                "0 and 100."
+            )
+
+        if (
+            self.stable_percentage
+            + self.canary_percentage
+            != 100
+        ):
+            raise ValueError(
+                "Stable and canary traffic percentages "
+                "must total 100."
+            )
+
+        if self.canary_percentage == 0:
+            raise ValueError(
+                "Canary traffic percentage must be greater than 0."
+            )
+
+        if self.canary_percentage == 100:
+            raise ValueError(
+                "Canary traffic percentage must be less than 100."
+            )

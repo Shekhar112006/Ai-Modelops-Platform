@@ -39,13 +39,16 @@ class FakeDeploymentRepository:
     def __init__(self, deployment=None):
         self.deployment = deployment
 
-    async def get_active_by_project(
+    async def list_routable_by_project(
         self,
         session,
         project_id,
         environment,
     ):
-        return self.deployment
+        if self.deployment is None:
+            return []
+
+        return [self.deployment]
 
 
 class FakeModelServerClient:
@@ -141,13 +144,13 @@ def test_prediction_without_active_deployment() -> None:
     """The router should reject requests without an active deployment."""
 
     class NoDeploymentRepository:
-        async def get_active_by_project(
+        async def list_routable_by_project(
             self,
             session,
             project_id,
             environment,
         ):
-            return None
+            return []
 
 
     original_factory = router_main.AsyncSessionFactory
