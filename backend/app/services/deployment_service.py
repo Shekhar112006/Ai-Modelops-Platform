@@ -484,6 +484,199 @@ class DeploymentService:
 
         return promoted
 
+    async def rollback_canary_deployment(
+        self,
+        session: AsyncSession,
+        deployment_id: UUID,
+    ) -> Deployment:
+        """
+        Roll back a canary or promoted deployment.
+
+        Before promotion:
+            Restore the stable staging deployment to 100% traffic.
+
+        After promotion:
+            Restore the previous stable deployment to production
+            with 100% traffic.
+
+        In both cases, mark the failed deployment as rolled_back.
+        """
+
+        deployment = await self.deployment_repository.get_by_id(
+            session,
+            deployment_id,
+        )
+
+        if deployment is None:
+            raise DeploymentNotFoundError(
+                f"Deployment '{deployment_id}' was not found."
+            )
+
+        current_status = DeploymentStatus(deployment.status)
+
+        rollbackable_statuses = {
+            DeploymentStatus.CANARY,
+            DeploymentStatus.PRODUCTION,
+        }
+
+        if current_status not in rollbackable_statuses:
+            raise ValueError(
+                f"Deployment '{deployment_id}' must be in "
+                "canary or production state before rollback. "
+                f"Current state={deployment.status!r}."
+            )
+
+        project_deployments = (
+            await self.deployment_repository.list_by_project(
+                session,
+                deployment.project_id,
+            )
+        )
+
+        active_statuses = {
+            DeploymentStatus.STAGING.value,
+            DeploymentStatus.CANARY.value,
+            DeploymentStatus.PROMOTING.value,
+            DeploymentStatus.PRODUCTION.value,
+        }
+
+        active_in_current_environment = [
+            item
+            for item in project_deployments
+            if item.environment == deployment.environment
+            and item.status in active_statuses
+        ]
+
+        total_traffic = sum(
+            item.traffic_percentage
+            for item in active_in_current_environment
+        )
+
+        if total_traffic != 100:
+            raise ValueError(
+                "Active deployment traffic must total 100% "
+                "before rollback. "
+                f"Current total is {total_traffic}%."
+            )
+
+        if current_status == DeploymentStatus.CANARY:
+            stable_candidates = [
+                item
+                for item in active_in_current_environment
+                if item.id != deployment.id
+                and item.status
+                in {
+                    DeploymentStatus.STAGING.value,
+                    DeploymentStatus.PRODUCTION.value,
+                }
+                and item.traffic_percentage > 0
+                and bool(item.model_endpoint)
+            ]
+
+        else:
+            stable_candidates = [
+                item
+                for item in project_deployments
+                if item.id != deployment.id
+                and item.environment
+                == DeploymentEnvironment.STAGING.value
+                and item.status == DeploymentStatus.STAGING.value
+                and item.traffic_percentage == 0
+                and bool(item.model_endpoint)
+            ]
+
+        if len(stable_candidates) != 1:
+            raise ValueError(
+                "Rollback requires exactly one identifiable "
+                "stable deployment. "
+                f"Found {len(stable_candidates)} candidates."
+            )
+
+        stable = stable_candidates[0]
+
+        validate_deployment_transition(
+            current=current_status,
+            target=DeploymentStatus.ROLLBACK,
+        )
+
+        validate_deployment_transition(
+            current=DeploymentStatus.ROLLBACK,
+            target=DeploymentStatus.ROLLED_BACK,
+        )
+
+        if current_status == DeploymentStatus.PRODUCTION:
+            validate_deployment_transition(
+                current=DeploymentStatus.STAGING,
+                target=DeploymentStatus.PRODUCTION,
+            )
+
+        # Mark the failed deployment as entering rollback.
+        await self.deployment_repository.update_status(
+            session=session,
+            deployment_id=deployment.id,
+            status=DeploymentStatus.ROLLBACK.value,
+        )
+
+        # Remove all traffic from the failed deployment.
+        await self.deployment_repository.update_endpoint(
+            session=session,
+            deployment_id=deployment.id,
+            endpoint=deployment.model_endpoint or "",
+            traffic_percentage=0,
+        )
+
+        if current_status == DeploymentStatus.CANARY:
+            # The stable staging deployment keeps its current state.
+            await self.deployment_repository.update_endpoint(
+                session=session,
+                deployment_id=stable.id,
+                endpoint=stable.model_endpoint or "",
+                traffic_percentage=100,
+            )
+
+        else:
+            # Restore the previous stable deployment to production.
+            await self.deployment_repository.update_environment(
+                session=session,
+                deployment_id=stable.id,
+                environment=DeploymentEnvironment.PRODUCTION.value,
+            )
+
+            await self.deployment_repository.update_status(
+                session=session,
+                deployment_id=stable.id,
+                status=DeploymentStatus.PRODUCTION.value,
+            )
+
+            await self.deployment_repository.update_endpoint(
+                session=session,
+                deployment_id=stable.id,
+                endpoint=stable.model_endpoint or "",
+                traffic_percentage=100,
+            )
+
+        # Complete the failed deployment's rollback lifecycle.
+        await self.deployment_repository.update_status(
+            session=session,
+            deployment_id=deployment.id,
+            status=DeploymentStatus.ROLLED_BACK.value,
+        )
+
+        await session.commit()
+
+        rolled_back = await self.deployment_repository.get_by_id(
+            session,
+            deployment.id,
+        )
+
+        if rolled_back is None:
+            raise DeploymentNotFoundError(
+                f"Deployment '{deployment_id}' disappeared "
+                "after rollback."
+            )
+
+        return rolled_back
+
     async def activate_staging_deployment(
         self,
         session: AsyncSession,

@@ -348,3 +348,152 @@ def test_non_canary_deployment_cannot_be_promoted() -> None:
 
     finally:
         cleanup_project(project_id)
+
+
+def test_rollback_canary_restores_stable_traffic() -> None:
+    """Rollback before promotion restores stable traffic to 100%."""
+    import asyncio
+
+    project_id = create_test_project()
+
+    try:
+        asyncio.run(create_stable_deployment(project_id))
+
+        async def run_test() -> None:
+            service = DeploymentService(
+                project_repository=ProjectRepository(),
+                deployment_repository=DeploymentRepository(),
+            )
+
+            async with AsyncSessionFactory() as session:
+                deployments = (
+                    await service.deployment_repository.list_by_project(
+                        session,
+                        project_id,
+                    )
+                )
+
+                stable_before = next(
+                    item
+                    for item in deployments
+                    if item.model_version == STABLE_VERSION
+                )
+
+                canary = await service.create_canary_deployment(
+                    session=session,
+                    project_id=project_id,
+                    model_name=MODEL_NAME,
+                    model_version=CANARY_VERSION,
+                    environment=DeploymentEnvironment.STAGING,
+                    endpoint=CANARY_ENDPOINT,
+                    canary_percentage=5,
+                )
+
+                rolled_back = (
+                    await service.rollback_canary_deployment(
+                        session=session,
+                        deployment_id=canary.id,
+                    )
+                )
+
+                stable = (
+                    await service.deployment_repository.get_by_id(
+                        session,
+                        stable_before.id,
+                    )
+                )
+
+                assert stable is not None
+                assert stable.status == "staging"
+                assert stable.traffic_percentage == 100
+
+                assert rolled_back.status == "rolled_back"
+                assert rolled_back.traffic_percentage == 0
+
+                assert stable.traffic_percentage + (
+                    rolled_back.traffic_percentage
+                ) == 100
+
+        asyncio.run(run_test())
+
+    finally:
+        cleanup_project(project_id)
+
+
+def test_rollback_promoted_canary_restores_previous_production() -> None:
+    """Rollback after promotion restores the previous stable model."""
+    import asyncio
+
+    project_id = create_test_project()
+
+    try:
+        asyncio.run(create_stable_deployment(project_id))
+
+        async def run_test() -> None:
+            service = DeploymentService(
+                project_repository=ProjectRepository(),
+                deployment_repository=DeploymentRepository(),
+            )
+
+            async with AsyncSessionFactory() as session:
+                deployments = (
+                    await service.deployment_repository.list_by_project(
+                        session,
+                        project_id,
+                    )
+                )
+
+                stable_before = next(
+                    item
+                    for item in deployments
+                    if item.model_version == STABLE_VERSION
+                )
+
+                canary = await service.create_canary_deployment(
+                    session=session,
+                    project_id=project_id,
+                    model_name=MODEL_NAME,
+                    model_version=CANARY_VERSION,
+                    environment=DeploymentEnvironment.STAGING,
+                    endpoint=CANARY_ENDPOINT,
+                    canary_percentage=5,
+                )
+
+                promoted = await service.promote_canary_deployment(
+                    session=session,
+                    deployment_id=canary.id,
+                )
+
+                assert promoted.status == "production"
+                assert promoted.traffic_percentage == 100
+
+                rolled_back = (
+                    await service.rollback_canary_deployment(
+                        session=session,
+                        deployment_id=canary.id,
+                    )
+                )
+
+                stable = (
+                    await service.deployment_repository.get_by_id(
+                        session,
+                        stable_before.id,
+                    )
+                )
+
+                assert stable is not None
+                assert stable.status == "production"
+                assert stable.environment == "production"
+                assert stable.traffic_percentage == 100
+
+                assert rolled_back.status == "rolled_back"
+                assert rolled_back.traffic_percentage == 0
+
+                assert stable.traffic_percentage + (
+                    rolled_back.traffic_percentage
+                ) == 100
+
+        asyncio.run(run_test())
+
+    finally:
+        cleanup_project(project_id)

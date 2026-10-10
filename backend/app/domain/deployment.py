@@ -44,9 +44,10 @@ ALLOWED_DEPLOYMENT_TRANSITIONS: dict[
             DeploymentStatus.ROLLBACK,
         }
     ),
-    DeploymentStatus.STAGING: frozenset(
+        DeploymentStatus.STAGING: frozenset(
         {
             DeploymentStatus.CANARY,
+            DeploymentStatus.PRODUCTION,
             DeploymentStatus.ROLLBACK,
         }
     ),
