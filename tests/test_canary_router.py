@@ -39,10 +39,11 @@ class FakeSessionFactory:
 
 
 class FakeDeploymentRepository:
-    """Return stable and canary deployments."""
+    """Return routable deployments for the requested environment."""
 
     def __init__(self, deployments):
         self.deployments = deployments
+        self.requested_environment = None
 
     async def list_routable_by_project(
         self,
@@ -50,8 +51,14 @@ class FakeDeploymentRepository:
         project_id,
         environment,
     ):
-        return self.deployments
+        self.requested_environment = environment
 
+        return [
+            deployment
+            for deployment in self.deployments
+            if deployment.environment == environment
+            and deployment.traffic_percentage > 0
+        ]
 
 class FakeModelServerClient:
     """Return a prediction identifying the selected model."""
@@ -257,4 +264,38 @@ def test_router_rejects_invalid_total_traffic(
     assert (
         "Invalid routing configuration"
         in response.json()["detail"]
+    )
+
+
+def test_router_routes_production_requests(monkeypatch) -> None:
+    """Production requests must select a production deployment."""
+
+    deployments = make_deployments()
+
+    stable = deployments[0]
+    canary = deployments[1]
+
+    stable.traffic_percentage = 0
+
+    canary.environment = "production"
+    canary.status = "production"
+    canary.traffic_percentage = 100
+
+    configure_router(monkeypatch, deployments)
+
+    response = client.post(
+        "/predict",
+        json={
+            "project_id": str(PROJECT_ID),
+            "environment": "production",
+            "features": [0.0] * 10,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["model_version"] == "5"
+
+    assert (
+        router_main.deployment_repository.requested_environment
+        == "production"
     )

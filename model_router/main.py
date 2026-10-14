@@ -45,19 +45,19 @@ async def predict(
     """Route a prediction using active deployment traffic weights."""
 
     async with AsyncSessionFactory() as session:
-        deployments = (
-            await deployment_repository.list_routable_by_project(
-                session=session,
-                project_id=payload.project_id,
-                environment="staging",
+            deployments = (
+                await deployment_repository.list_routable_by_project(
+                    session=session,
+                    project_id=payload.project_id,
+                    environment=payload.environment,
+                )
             )
-        )
 
     if not deployments:
         raise HTTPException(
             status_code=404,
             detail=(
-                f"No active staging deployment found "
+                f"No active {payload.environment} deployment found "
                 f"for project '{payload.project_id}'."
             ),
         )

@@ -2,18 +2,15 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
 class RouterPredictionRequest(BaseModel):
-    """Request accepted by the model router."""
-
     project_id: UUID
-
-    features: list[float] = Field(
-        min_length=10,
-        max_length=10,
-    )
+    environment: Literal["staging", "production"] = "staging"
+    features: list[float] = Field(min_length=10, max_length=10)
 
 
 class RouterPredictionResponse(BaseModel):
