@@ -90,9 +90,13 @@ def check_deployment_health() -> dict[str, object]:
     from backend.app.repositories.deployment_health_check_repository import (
         DeploymentHealthCheckRepository,
     )
+    from backend.app.repositories.deployment_recovery_event_repository import (
+        DeploymentRecoveryEventRepository,
+    )
 
     session = get_session()
     repository = DeploymentHealthCheckRepository()
+    recovery_event_repository = DeploymentRecoveryEventRepository()
 
     checked = 0
     healthy_count = 0
@@ -161,6 +165,89 @@ def check_deployment_health() -> dict[str, object]:
                     and consecutive_failures >= settings.health_check_failure_threshold
                     and deployment.status in {'canary', 'production'}
                 )
+
+                # Capture diagnostics alongside significant health events.
+                event_details: dict[str, object] = {
+                    "model_name": deployment.model_name,
+                    "model_version": deployment.model_version,
+                    "environment": deployment.environment,
+                    "deployment_status": deployment.status,
+                    "status_code": status_code,
+                    "response_time_ms": response_time_ms,
+                    "previous_consecutive_failures": (
+                        previous.consecutive_failures
+                        if previous is not None
+                        else 0
+                    ),
+                }
+
+                if error_message is not None:
+                    event_details["error_message"] = error_message
+
+                # Record the beginning of a consecutive failure streak.
+                if (
+                    not is_healthy
+                    and (
+                        previous is None
+                        or previous.consecutive_failures == 0
+                    )
+                ):
+                    recovery_event_repository.create(
+                        session,
+                        deployment_id=deployment.id,
+                        event_type="health_check_failed",
+                        severity="warning",
+                        message=(
+                            f"Health check failed for {deployment.model_name} "
+                            f"version {deployment.model_version}."
+                        ),
+                        consecutive_failures=consecutive_failures,
+                        details=event_details,
+                    )
+
+                # Record threshold attainment for eligible deployments.
+                if (
+                    recovery_eligible
+                    and consecutive_failures
+                    == settings.health_check_failure_threshold
+                ):
+                    recovery_event_repository.create(
+                        session,
+                        deployment_id=deployment.id,
+                        event_type="failure_threshold_reached",
+                        severity="error",
+                        message=(
+                            f"Deployment {deployment.model_name} version "
+                            f"{deployment.model_version} reached the "
+                            "configured health-check failure threshold."
+                        ),
+                        consecutive_failures=consecutive_failures,
+                        details={
+                            **event_details,
+                            "failure_threshold": (
+                                settings.health_check_failure_threshold
+                            ),
+                        },
+                    )
+
+                # Record recovery after at least one consecutive failure.
+                if (
+                    is_healthy
+                    and previous is not None
+                    and previous.consecutive_failures > 0
+                ):
+                    recovery_event_repository.create(
+                        session,
+                        deployment_id=deployment.id,
+                        event_type="deployment_health_recovered",
+                        severity="info",
+                        message=(
+                            f"Deployment {deployment.model_name} version "
+                            f"{deployment.model_version} recovered its health."
+                        ),
+                        consecutive_failures=0,
+                        details=event_details,
+                    )
 
                 repository.create(
                     session,

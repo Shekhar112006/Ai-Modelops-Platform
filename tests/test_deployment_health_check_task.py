@@ -8,6 +8,7 @@ import httpx
 import worker.tasks as task_module
 from backend.app.repositories import (
     deployment_health_check_repository as repository_module,
+    deployment_recovery_event_repository as recovery_event_repository_module,
 )
 
 
@@ -51,6 +52,21 @@ class FakeRepository:
         record = SimpleNamespace(**kwargs)
         self.created_records.append(record)
         return record
+
+
+class FakeRecoveryEventRepository:
+    """Capture recovery events in memory during task tests."""
+
+    last_instance = None
+
+    def __init__(self) -> None:
+        self.events: list[SimpleNamespace] = []
+        type(self).last_instance = self
+
+    def create(self, session, **kwargs):
+        event = SimpleNamespace(**kwargs)
+        self.events.append(event)
+        return event
 
 
 class FakeHTTPClient:
@@ -116,6 +132,13 @@ def run_health_check(
         httpx,
         "Client",
         lambda timeout: FakeHTTPClient(status_code),
+    )
+
+    fake_recovery_repository = FakeRecoveryEventRepository()
+    monkeypatch.setattr(
+        recovery_event_repository_module,
+        "DeploymentRecoveryEventRepository",
+        lambda: fake_recovery_repository,
     )
 
     result = task_module.check_deployment_health()
@@ -231,3 +254,66 @@ def test_failure_below_threshold_is_not_recovery_eligible(
     assert result["results"][0]["recovery_eligible"] is False
 
     assert session.closed is True
+
+
+
+def test_first_failure_records_health_check_failed_event(
+    monkeypatch,
+) -> None:
+    result, _, _ = run_health_check(
+        monkeypatch,
+        status_code=503,
+    )
+
+    repository = FakeRecoveryEventRepository.last_instance
+    assert repository is not None
+    assert len(repository.events) == 1
+
+    event = repository.events[0]
+    assert event.event_type == "health_check_failed"
+    assert event.severity == "warning"
+    assert event.consecutive_failures == 1
+    assert event.details["status_code"] == 503
+    assert result["unhealthy"] == 1
+
+
+def test_threshold_records_recovery_event(
+    monkeypatch,
+) -> None:
+    result, _, _ = run_health_check(
+        monkeypatch,
+        status_code=503,
+        previous_failures=2,
+    )
+
+    repository = FakeRecoveryEventRepository.last_instance
+    assert repository is not None
+    assert len(repository.events) == 1
+
+    event = repository.events[0]
+    assert event.event_type == "failure_threshold_reached"
+    assert event.severity == "error"
+    assert event.consecutive_failures == 3
+    assert event.details["failure_threshold"] == 3
+    assert result["recovery_candidates"] == 1
+
+
+def test_recovered_endpoint_records_recovery_event(
+    monkeypatch,
+) -> None:
+    result, _, _ = run_health_check(
+        monkeypatch,
+        status_code=200,
+        previous_failures=3,
+    )
+
+    repository = FakeRecoveryEventRepository.last_instance
+    assert repository is not None
+    assert len(repository.events) == 1
+
+    event = repository.events[0]
+    assert event.event_type == "deployment_health_recovered"
+    assert event.severity == "info"
+    assert event.consecutive_failures == 0
+    assert result["healthy"] == 1
+
