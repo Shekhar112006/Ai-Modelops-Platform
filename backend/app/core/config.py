@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -12,6 +13,9 @@ class Settings(BaseSettings):
     database_url: str
     redis_url: str
     celery_result_backend: str
+    health_check_timeout_seconds: float = 5.0
+    health_check_interval_seconds: float = 60.0
+    health_check_failure_threshold: int = Field(default=3, ge=1)
 
     api_prefix: str = "/api/v1"
 

@@ -18,6 +18,12 @@ celery_app.conf.update(
     accept_content=["json"],
     timezone="UTC",
     enable_utc=True,
+    beat_schedule={
+        "deployment-health-check-every-minute": {
+            "task": "modelops.check_deployment_health",
+            "schedule": settings.health_check_interval_seconds,
+        },
+    },
 )
 
 celery_app.autodiscover_tasks(
