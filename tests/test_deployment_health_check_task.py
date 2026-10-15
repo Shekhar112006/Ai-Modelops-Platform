@@ -6,6 +6,9 @@ from uuid import uuid4
 import httpx
 
 import worker.tasks as task_module
+from backend.app.services import (
+    deployment_recovery_executor as recovery_executor_module,
+)
 from backend.app.repositories import (
     deployment_health_check_repository as repository_module,
     deployment_recovery_event_repository as recovery_event_repository_module,
@@ -139,6 +142,15 @@ def run_health_check(
         recovery_event_repository_module,
         "DeploymentRecoveryEventRepository",
         lambda: fake_recovery_repository,
+    )
+
+    monkeypatch.setattr(
+        recovery_executor_module,
+        "execute_automated_rollback",
+        lambda requested_id: {
+            "deployment_id": str(requested_id),
+            "status": "rolled_back",
+        },
     )
 
     result = task_module.check_deployment_health()
@@ -288,7 +300,13 @@ def test_threshold_records_recovery_event(
 
     repository = FakeRecoveryEventRepository.last_instance
     assert repository is not None
-    assert len(repository.events) == 1
+    assert [
+        event.event_type for event in repository.events
+    ] == [
+        "failure_threshold_reached",
+        "rollback_started",
+        "rollback_succeeded",
+    ]
 
     event = repository.events[0]
     assert event.event_type == "failure_threshold_reached"

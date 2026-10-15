@@ -80,7 +80,7 @@ def run_training_job(
     name="modelops.check_deployment_health",
 )
 def check_deployment_health() -> dict[str, object]:
-    """Check active deployment endpoints and persist the results."""
+    """Check deployment health, record events, and recover when eligible."""
 
     from time import perf_counter
 
@@ -93,10 +93,17 @@ def check_deployment_health() -> dict[str, object]:
     from backend.app.repositories.deployment_recovery_event_repository import (
         DeploymentRecoveryEventRepository,
     )
+    from backend.app.services.deployment_recovery_policy import (
+        DeploymentRecoveryPolicy,
+    )
+    from backend.app.services.deployment_recovery_executor import (
+        execute_automated_rollback,
+    )
 
     session = get_session()
-    repository = DeploymentHealthCheckRepository()
-    recovery_event_repository = DeploymentRecoveryEventRepository()
+    health_repository = DeploymentHealthCheckRepository()
+    recovery_repository = DeploymentRecoveryEventRepository()
+    policy = DeploymentRecoveryPolicy()
 
     checked = 0
     healthy_count = 0
@@ -105,12 +112,18 @@ def check_deployment_health() -> dict[str, object]:
     results: list[dict[str, object]] = []
 
     try:
-        deployments = repository.list_monitorable_deployments(session)
+        deployments = health_repository.list_monitorable_deployments(session)
 
         with httpx.Client(
             timeout=settings.health_check_timeout_seconds,
         ) as client:
             for deployment in deployments:
+                deployment_id = deployment.id
+                model_name = deployment.model_name
+                model_version = deployment.model_version
+                environment = deployment.environment
+                deployment_status = deployment.status
+
                 endpoint = (
                     f"{deployment.model_endpoint.rstrip('/')}/health"
                 )
@@ -145,113 +158,49 @@ def check_deployment_health() -> dict[str, object]:
                     round((perf_counter() - started) * 1000),
                 )
 
-                previous = repository.get_latest_for_deployment(
+                previous = health_repository.get_latest_for_deployment(
                     session,
-                    deployment.id,
+                    deployment_id,
+                )
+
+                previous_failure_count = (
+                    previous.consecutive_failures
+                    if previous is not None
+                    else 0
                 )
 
                 consecutive_failures = (
                     0
                     if is_healthy
-                    else (
-                        previous.consecutive_failures + 1
-                        if previous is not None
-                        else 1
-                    )
+                    else previous_failure_count + 1
                 )
 
-                recovery_eligible = (
-                    not is_healthy
-                    and consecutive_failures >= settings.health_check_failure_threshold
-                    and deployment.status in {'canary', 'production'}
+                decision = policy.evaluate(
+                    is_healthy=is_healthy,
+                    deployment_status=deployment_status,
+                    consecutive_failures=consecutive_failures,
+                    previous_consecutive_failures=previous_failure_count,
+                    failure_threshold=settings.health_check_failure_threshold,
                 )
 
-                # Capture diagnostics alongside significant health events.
+                recovery_eligible = decision.eligible
+
                 event_details: dict[str, object] = {
-                    "model_name": deployment.model_name,
-                    "model_version": deployment.model_version,
-                    "environment": deployment.environment,
-                    "deployment_status": deployment.status,
+                    "model_name": model_name,
+                    "model_version": model_version,
+                    "environment": environment,
+                    "deployment_status": deployment_status,
                     "status_code": status_code,
                     "response_time_ms": response_time_ms,
-                    "previous_consecutive_failures": (
-                        previous.consecutive_failures
-                        if previous is not None
-                        else 0
-                    ),
+                    "previous_consecutive_failures": previous_failure_count,
                 }
 
                 if error_message is not None:
                     event_details["error_message"] = error_message
 
-                # Record the beginning of a consecutive failure streak.
-                if (
-                    not is_healthy
-                    and (
-                        previous is None
-                        or previous.consecutive_failures == 0
-                    )
-                ):
-                    recovery_event_repository.create(
-                        session,
-                        deployment_id=deployment.id,
-                        event_type="health_check_failed",
-                        severity="warning",
-                        message=(
-                            f"Health check failed for {deployment.model_name} "
-                            f"version {deployment.model_version}."
-                        ),
-                        consecutive_failures=consecutive_failures,
-                        details=event_details,
-                    )
-
-                # Record threshold attainment for eligible deployments.
-                if (
-                    recovery_eligible
-                    and consecutive_failures
-                    == settings.health_check_failure_threshold
-                ):
-                    recovery_event_repository.create(
-                        session,
-                        deployment_id=deployment.id,
-                        event_type="failure_threshold_reached",
-                        severity="error",
-                        message=(
-                            f"Deployment {deployment.model_name} version "
-                            f"{deployment.model_version} reached the "
-                            "configured health-check failure threshold."
-                        ),
-                        consecutive_failures=consecutive_failures,
-                        details={
-                            **event_details,
-                            "failure_threshold": (
-                                settings.health_check_failure_threshold
-                            ),
-                        },
-                    )
-
-                # Record recovery after at least one consecutive failure.
-                if (
-                    is_healthy
-                    and previous is not None
-                    and previous.consecutive_failures > 0
-                ):
-                    recovery_event_repository.create(
-                        session,
-                        deployment_id=deployment.id,
-                        event_type="deployment_health_recovered",
-                        severity="info",
-                        message=(
-                            f"Deployment {deployment.model_name} version "
-                            f"{deployment.model_version} recovered its health."
-                        ),
-                        consecutive_failures=0,
-                        details=event_details,
-                    )
-
-                repository.create(
+                health_repository.create(
                     session,
-                    deployment_id=deployment.id,
+                    deployment_id=deployment_id,
                     is_healthy=is_healthy,
                     response_time_ms=response_time_ms,
                     status_code=status_code,
@@ -259,8 +208,95 @@ def check_deployment_health() -> dict[str, object]:
                     error_message=error_message,
                 )
 
-                # Persist each result so an issue with a later endpoint
-                # does not discard earlier health-check records.
+                # Record the start of a new consecutive failure streak.
+                if (
+                    not is_healthy
+                    and previous_failure_count == 0
+                ):
+                    recovery_repository.create(
+                        session,
+                        deployment_id=deployment_id,
+                        event_type="health_check_failed",
+                        severity="warning",
+                        message=(
+                            f"Health check failed for {model_name} "
+                            f"version {model_version}."
+                        ),
+                        consecutive_failures=consecutive_failures,
+                        details=event_details,
+                    )
+
+                # Record threshold crossing without repeating it on later checks.
+                threshold_crossed = (
+                    not is_healthy
+                    and previous_failure_count
+                    < settings.health_check_failure_threshold
+                    and consecutive_failures
+                    >= settings.health_check_failure_threshold
+                )
+
+                if threshold_crossed:
+                    recovery_repository.create(
+                        session,
+                        deployment_id=deployment_id,
+                        event_type="failure_threshold_reached",
+                        severity="error",
+                        message=(
+                            f"Deployment {model_name} version "
+                            f"{model_version} reached the configured "
+                            "health-check failure threshold."
+                        ),
+                        consecutive_failures=consecutive_failures,
+                        details={
+                            **event_details,
+                            "failure_threshold": (
+                                settings.health_check_failure_threshold
+                            ),
+                            "recovery_eligible": recovery_eligible,
+                            "recovery_reason": decision.reason,
+                        },
+                    )
+
+                # Record recovery even when no rollback is necessary.
+                if (
+                    is_healthy
+                    and previous_failure_count > 0
+                ):
+                    recovery_repository.create(
+                        session,
+                        deployment_id=deployment_id,
+                        event_type="deployment_health_recovered",
+                        severity="info",
+                        message=(
+                            f"Deployment {model_name} version "
+                            f"{model_version} recovered its health."
+                        ),
+                        consecutive_failures=0,
+                        details=event_details,
+                    )
+
+                recovery_outcome: dict[str, object] = {
+                    "attempted": False,
+                    "status": "not_required",
+                    "reason": decision.reason,
+                }
+
+                # Persist the health result and the rollback intent before
+                # invoking the separate asynchronous deployment transaction.
+                if recovery_eligible:
+                    recovery_repository.create(
+                        session,
+                        deployment_id=deployment_id,
+                        event_type="rollback_started",
+                        severity="warning",
+                        message=(
+                            f"Automatic rollback started for {model_name} "
+                            f"version {model_version}."
+                        ),
+                        consecutive_failures=consecutive_failures,
+                        details=event_details,
+                    )
+
                 session.commit()
 
                 checked += 1
@@ -273,19 +309,81 @@ def check_deployment_health() -> dict[str, object]:
                 if recovery_eligible:
                     recovery_candidate_count += 1
 
+                    try:
+                        rollback_result = execute_automated_rollback(
+                            deployment_id
+                        )
+                    except Exception as exc:
+                        rollback_error = (
+                            f"{type(exc).__name__}: {exc}"
+                        )[:1000]
+
+                        # The preceding health-check commit is already durable.
+                        session.rollback()
+
+                        recovery_repository.create(
+                            session,
+                            deployment_id=deployment_id,
+                            event_type="rollback_failed",
+                            severity="error",
+                            message=(
+                                f"Automatic rollback failed for {model_name} "
+                                f"version {model_version}."
+                            ),
+                            consecutive_failures=consecutive_failures,
+                            details={
+                                **event_details,
+                                "error": rollback_error,
+                            },
+                        )
+                        session.commit()
+
+                        recovery_outcome = {
+                            "attempted": True,
+                            "status": "failed",
+                            "reason": "rollback_execution_failed",
+                            "error": rollback_error,
+                        }
+                    else:
+                        recovery_repository.create(
+                            session,
+                            deployment_id=deployment_id,
+                            event_type="rollback_succeeded",
+                            severity="info",
+                            message=(
+                                f"Automatic rollback completed for "
+                                f"{model_name} version {model_version}."
+                            ),
+                            consecutive_failures=consecutive_failures,
+                            details={
+                                **event_details,
+                                "rollback_result": rollback_result,
+                            },
+                        )
+                        session.commit()
+
+                        recovery_outcome = {
+                            "attempted": True,
+                            "status": "succeeded",
+                            "reason": "rollback_completed",
+                            "deployment_id": rollback_result["deployment_id"],
+                            "deployment_status": rollback_result["status"],
+                        }
+
                 results.append(
                     {
-                        "deployment_id": str(deployment.id),
-                        "model_name": deployment.model_name,
-                        "model_version": deployment.model_version,
-                        "environment": deployment.environment,
-                        "status": deployment.status,
+                        "deployment_id": str(deployment_id),
+                        "model_name": model_name,
+                        "model_version": model_version,
+                        "environment": environment,
+                        "status": deployment_status,
                         "is_healthy": is_healthy,
                         "recovery_eligible": recovery_eligible,
                         "status_code": status_code,
                         "response_time_ms": response_time_ms,
                         "consecutive_failures": consecutive_failures,
                         "error_message": error_message,
+                        "recovery": recovery_outcome,
                     }
                 )
 
