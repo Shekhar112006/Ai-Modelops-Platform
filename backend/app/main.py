@@ -9,6 +9,7 @@ from backend.app.api import (health, projects, training, deployment,)
 from backend.app.core.config import settings
 from backend.app.db.session import engine
 from backend.app.core.logging_config import configure_logging
+from backend.app.core.metrics import install_http_metrics
 
 configure_logging("modelops-api")
 logger = logging.getLogger(__name__)
@@ -41,6 +42,8 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+install_http_metrics(app, service_name="modelops-api")
 
 app.include_router(
     health.router,

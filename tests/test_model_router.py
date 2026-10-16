@@ -129,6 +129,23 @@ def test_prediction_uses_active_deployment(monkeypatch) -> None:
     assert data["model_version"] == "5"
     assert data["prediction"] == [0]
 
+    metrics_response = client.get("/metrics")
+    assert metrics_response.status_code == 200
+
+    matching_prediction_metrics = [
+        line
+        for line in metrics_response.text.splitlines()
+        if line.startswith("modelops_predictions_total{")
+        and 'service="modelops-model-router"' in line
+        and 'environment="staging"' in line
+        and 'model_name="demo-classifier"' in line
+        and 'model_version="5"' in line
+        and 'outcome="success"' in line
+    ]
+
+    assert matching_prediction_metrics, metrics_response.text
+    assert float(matching_prediction_metrics[0].rsplit(" ", 1)[1]) >= 1
+
     assert (
         FakeModelServerClient.last_base_url
         == "http://model-server-test:8000"

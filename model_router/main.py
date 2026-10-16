@@ -7,6 +7,10 @@ from fastapi import FastAPI, HTTPException
 
 from backend.app.db.session import AsyncSessionFactory
 from backend.app.core.logging_config import configure_logging
+from backend.app.core.metrics import (
+    install_http_metrics,
+    record_prediction_metric,
+)
 from backend.app.repositories.deployment_repository import (
     DeploymentRepository,
 )
@@ -30,6 +34,11 @@ deployment_repository = DeploymentRepository()
 app = FastAPI(
     title="AI ModelOps Model Router",
     version="0.1.0",
+)
+
+install_http_metrics(
+    app,
+    service_name="modelops-model-router",
 )
 
 
@@ -80,6 +89,11 @@ async def predict(
                 "environment": payload.environment,
             },
         )
+        record_prediction_metric(
+            service_name="modelops-model-router",
+            environment=payload.environment,
+            outcome="no_deployment",
+        )
         raise HTTPException(
             status_code=404,
             detail=(
@@ -103,6 +117,11 @@ async def predict(
                 "error": str(exc),
             },
         )
+        record_prediction_metric(
+            service_name="modelops-model-router",
+            environment=payload.environment,
+            outcome="routing_error",
+        )
         raise HTTPException(
             status_code=404,
             detail=str(exc),
@@ -117,6 +136,11 @@ async def predict(
                 "environment": payload.environment,
                 "error": str(exc),
             },
+        )
+        record_prediction_metric(
+            service_name="modelops-model-router",
+            environment=payload.environment,
+            outcome="routing_error",
         )
         raise HTTPException(
             status_code=503,
@@ -145,6 +169,13 @@ async def predict(
                 "error_type": type(exc).__name__,
             },
         )
+        record_prediction_metric(
+            service_name="modelops-model-router",
+            environment=payload.environment,
+            outcome="model_server_error",
+            model_name=deployment.model_name,
+            model_version=deployment.model_version,
+        )
         raise HTTPException(
             status_code=503,
             detail=f"Model server unavailable: {exc}",
@@ -164,6 +195,14 @@ async def predict(
                 round((perf_counter() - started) * 1000),
             ),
         },
+    )
+
+    record_prediction_metric(
+        service_name="modelops-model-router",
+        environment=payload.environment,
+        outcome="success",
+        model_name=str(result["model_name"]),
+        model_version=str(result["model_version"]),
     )
 
     return RouterPredictionResponse(
