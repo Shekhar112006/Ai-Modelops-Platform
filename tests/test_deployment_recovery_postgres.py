@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import os
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from threading import Barrier
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.engine import make_url
 
 from backend.app.core.config import settings
@@ -218,6 +219,99 @@ def test_postgres_concurrent_claim_and_recovery_state_transitions() -> None:
             session.commit()
 
             # Confirm another recovery claim succeeds after the reset.
+            assert repository.claim(
+                session,
+                deployment_id=deployment_id,
+                consecutive_failures=3,
+            ) is True
+            session.commit()
+
+        # Simulate a claim that has exceeded its recovery timeout.
+        with SessionFactory() as session:
+            session.execute(
+                update(DeploymentRecoveryState)
+                .where(
+                    DeploymentRecoveryState.deployment_id == deployment_id
+                )
+                .values(
+                    claimed_at=(
+                        datetime.now(timezone.utc)
+                        - timedelta(seconds=600)
+                    )
+                )
+            )
+            # Simulate a rollback changing the deployment out of a
+            # normally monitored state before the worker crashes.
+            session.execute(
+                update(Deployment)
+                .where(Deployment.id == deployment_id)
+                .values(status="rolled_back", traffic_percentage=0)
+            )
+            session.commit()
+
+        # Stale recovery discovery must not depend on deployment status.
+        with SessionFactory() as session:
+            assert repository.list_stale_candidate_ids(
+                session,
+                timeout_seconds=300.0,
+            ) == [deployment_id]
+
+        # Expired claims become failed, but are not released for retry.
+        with SessionFactory() as session:
+            assert repository.mark_stale_failed(
+                session,
+                deployment_id=deployment_id,
+                timeout_seconds=300.0,
+            ) is True
+            session.commit()
+
+        with SessionFactory() as session:
+            stale_state = session.scalars(
+                select(DeploymentRecoveryState).where(
+                    DeploymentRecoveryState.deployment_id == deployment_id
+                )
+            ).one()
+
+            assert stale_state.status == "failed"
+            assert stale_state.last_error.startswith(
+                "Stale recovery claim detected:"
+            )
+
+            assert repository.claim(
+                session,
+                deployment_id=deployment_id,
+                consecutive_failures=4,
+            ) is False
+
+            assert repository.reset_after_healthy(
+                session,
+                deployment_id=deployment_id,
+            ) is False
+            session.commit()
+
+        # Simulate the original worker completing after stale detection.
+        with SessionFactory() as session:
+            assert repository.mark_completed(
+                session,
+                deployment_id=deployment_id,
+            ) is True
+            session.commit()
+
+        with SessionFactory() as session:
+            completed_state = session.scalars(
+                select(DeploymentRecoveryState).where(
+                    DeploymentRecoveryState.deployment_id == deployment_id
+                )
+            ).one()
+
+            assert completed_state.status == "completed"
+
+            assert repository.reset_after_healthy(
+                session,
+                deployment_id=deployment_id,
+            ) is True
+            session.commit()
+
             assert repository.claim(
                 session,
                 deployment_id=deployment_id,

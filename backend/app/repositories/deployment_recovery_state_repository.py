@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from sqlalchemy import func, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -77,6 +78,12 @@ class DeploymentRecoveryStateRepository:
             .where(
                 DeploymentRecoveryState.deployment_id == deployment_id,
                 DeploymentRecoveryState.status != "in_progress",
+                or_(
+                    DeploymentRecoveryState.last_error.is_(None),
+                    ~DeploymentRecoveryState.last_error.like(
+                        "Stale recovery claim detected:%"
+                    ),
+                ),
             )
             .values(
                 status="idle",
@@ -91,6 +98,75 @@ class DeploymentRecoveryStateRepository:
         result = session.execute(statement)
         return result.rowcount == 1
 
+    def list_stale_candidate_ids(
+        self,
+        session: Session,
+        *,
+        timeout_seconds: float,
+    ) -> list[UUID]:
+        """List expired recovery claims independently of deployment status."""
+        if timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be greater than zero.")
+
+        stale_before = datetime.now(timezone.utc) - timedelta(
+            seconds=timeout_seconds
+        )
+
+        statement = select(
+            DeploymentRecoveryState.deployment_id
+        ).where(
+            DeploymentRecoveryState.status == "in_progress",
+            DeploymentRecoveryState.claimed_at.is_not(None),
+            DeploymentRecoveryState.claimed_at <= stale_before,
+        )
+
+        return list(session.scalars(statement).all())
+
+    def mark_stale_failed(
+        self,
+        session: Session,
+        *,
+        deployment_id: UUID,
+        timeout_seconds: float,
+    ) -> bool:
+        """Mark an expired claim failed without releasing it for retry.
+
+        The update is conditional and atomic. A claim can be marked stale
+        only if it is still in progress and its claimed_at timestamp is
+        older than the configured timeout. It is deliberately not reset
+        to idle, because the original worker may still be executing.
+        """
+        if timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be greater than zero.")
+
+        stale_before = datetime.now(timezone.utc) - timedelta(
+            seconds=timeout_seconds
+        )
+        error = (
+            f"Stale recovery claim detected: exceeded {timeout_seconds:g} seconds; "
+            "automatic retry was suppressed pending reconciliation."
+        )
+
+        statement = (
+            update(DeploymentRecoveryState)
+            .where(
+                DeploymentRecoveryState.deployment_id == deployment_id,
+                DeploymentRecoveryState.status == "in_progress",
+                DeploymentRecoveryState.claimed_at.is_not(None),
+                DeploymentRecoveryState.claimed_at <= stale_before,
+            )
+            .values(
+                status="failed",
+                completed_at=func.now(),
+                last_error=error,
+                updated_at=func.now(),
+            )
+            .returning(DeploymentRecoveryState.id)
+        )
+
+        result = session.execute(statement)
+        return result.scalar_one_or_none() is not None
+
     def mark_completed(
         self,
         session: Session,
@@ -102,7 +178,15 @@ class DeploymentRecoveryStateRepository:
             update(DeploymentRecoveryState)
             .where(
                 DeploymentRecoveryState.deployment_id == deployment_id,
-                DeploymentRecoveryState.status == "in_progress",
+                or_(
+                    DeploymentRecoveryState.status == "in_progress",
+                    and_(
+                        DeploymentRecoveryState.status == "failed",
+                        DeploymentRecoveryState.last_error.like(
+                            "Stale recovery claim detected:%"
+                        ),
+                    ),
+                ),
             )
             .values(
                 status="completed",
@@ -127,7 +211,15 @@ class DeploymentRecoveryStateRepository:
             update(DeploymentRecoveryState)
             .where(
                 DeploymentRecoveryState.deployment_id == deployment_id,
-                DeploymentRecoveryState.status == "in_progress",
+                or_(
+                    DeploymentRecoveryState.status == "in_progress",
+                    and_(
+                        DeploymentRecoveryState.status == "failed",
+                        DeploymentRecoveryState.last_error.like(
+                            "Stale recovery claim detected:%"
+                        ),
+                    ),
+                ),
             )
             .values(
                 status="failed",

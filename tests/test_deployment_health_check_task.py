@@ -78,10 +78,19 @@ class FakeRecoveryStateRepository:
 
     last_instance = None
 
-    def __init__(self, claim_result: bool = True) -> None:
+    def __init__(
+        self,
+        claim_result: bool = True,
+        stale_claim_result: bool = False,
+        stale_candidate_ids: list | None = None,
+    ) -> None:
         self.claim_result = claim_result
+        self.stale_claim_result = stale_claim_result
+        self.stale_candidate_ids = stale_candidate_ids or []
+        self.stale_list_calls = []
         self.claim_calls = []
         self.reset_calls = []
+        self.stale_calls = []
         self.completed = []
         self.failed = []
         type(self).last_instance = self
@@ -101,6 +110,25 @@ class FakeRecoveryStateRepository:
     def reset_after_healthy(self, session, *, deployment_id):
         self.reset_calls.append(deployment_id)
         return False
+
+    def list_stale_candidate_ids(
+        self,
+        session,
+        *,
+        timeout_seconds,
+    ):
+        self.stale_list_calls.append(timeout_seconds)
+        return list(self.stale_candidate_ids)
+
+    def mark_stale_failed(
+        self,
+        session,
+        *,
+        deployment_id,
+        timeout_seconds,
+    ):
+        self.stale_calls.append((deployment_id, timeout_seconds))
+        return self.stale_claim_result
 
     def mark_completed(self, session, *, deployment_id):
         self.completed.append(deployment_id)
@@ -140,6 +168,7 @@ def run_health_check(
     status_code: int,
     previous_failures: int | None = None,
     recovery_claim_result: bool = True,
+    stale_claim_result: bool = False,
 ):
     deployment = SimpleNamespace(
         id=uuid4(),
@@ -183,6 +212,10 @@ def run_health_check(
     fake_recovery_repository = FakeRecoveryEventRepository()
     fake_recovery_state_repository = FakeRecoveryStateRepository(
         claim_result=recovery_claim_result,
+        stale_claim_result=stale_claim_result,
+        stale_candidate_ids=(
+            [deployment.id] if stale_claim_result else []
+        ),
     )
 
     monkeypatch.setattr(

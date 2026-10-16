@@ -118,6 +118,53 @@ def check_deployment_health() -> dict[str, object]:
     try:
         deployments = health_repository.list_monitorable_deployments(session)
 
+        # Inspect recovery states independently of deployment monitoring
+        # status so interrupted claims cannot escape detection.
+        stale_claims_detected: set[UUID] = set()
+        stale_candidate_ids = (
+            recovery_state_repository.list_stale_candidate_ids(
+                session,
+                timeout_seconds=settings.recovery_claim_timeout_seconds,
+            )
+        )
+
+        for stale_deployment_id in stale_candidate_ids:
+            stale_marked = recovery_state_repository.mark_stale_failed(
+                session,
+                deployment_id=stale_deployment_id,
+                timeout_seconds=settings.recovery_claim_timeout_seconds,
+            )
+
+            # Only the task that performs the conditional transition records
+            # the event; concurrent tasks cannot duplicate this event.
+            if not stale_marked:
+                continue
+
+            recovery_repository.create(
+                session,
+                deployment_id=stale_deployment_id,
+                event_type="stale_recovery_claim_detected",
+                severity="error",
+                message=(
+                    f"Recovery claim for deployment {stale_deployment_id} "
+                    "exceeded the configured timeout. Automatic retry was "
+                    "suppressed pending reconciliation."
+                ),
+                consecutive_failures=0,
+                details={
+                    "claim_timeout_seconds": (
+                        settings.recovery_claim_timeout_seconds
+                    ),
+                    "requires_reconciliation": True,
+                },
+            )
+            stale_claims_detected.add(stale_deployment_id)
+
+        # Make stale-state transitions durable before health checks or
+        # rollback only when this task actually marked a claim stale.
+        if stale_claims_detected:
+            session.commit()
+
         with httpx.Client(
             timeout=settings.health_check_timeout_seconds,
         ) as client:
@@ -224,6 +271,10 @@ def check_deployment_health() -> dict[str, object]:
                     consecutive_failures=consecutive_failures,
                     error_message=error_message,
                 )
+
+                # Report whether the global stale-claim scan marked
+                # this deployment during the current task execution.
+                stale_claim_marked = deployment_id in stale_claims_detected
 
                 # Record the start of a new consecutive failure streak.
                 if (
@@ -566,6 +617,7 @@ def check_deployment_health() -> dict[str, object]:
                         "is_healthy": is_healthy,
                         "recovery_eligible": recovery_eligible,
                         "recovery_claimed": recovery_claimed,
+                        "stale_recovery_claim_detected": stale_claim_marked,
                         "status_code": status_code,
                         "response_time_ms": response_time_ms,
                         "consecutive_failures": consecutive_failures,

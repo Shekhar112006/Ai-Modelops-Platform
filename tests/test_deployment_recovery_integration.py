@@ -68,10 +68,19 @@ class FakeRecoveryStateRepository:
 
     last_instance = None
 
-    def __init__(self, claim_result: bool = True) -> None:
+    def __init__(
+        self,
+        claim_result: bool = True,
+        stale_claim_result: bool = False,
+        stale_candidate_ids: list | None = None,
+    ) -> None:
         self.claim_result = claim_result
+        self.stale_claim_result = stale_claim_result
+        self.stale_candidate_ids = stale_candidate_ids or []
+        self.stale_list_calls = []
         self.claim_calls = []
         self.reset_calls = []
+        self.stale_calls = []
         self.completed = []
         self.failed = []
         type(self).last_instance = self
@@ -91,6 +100,25 @@ class FakeRecoveryStateRepository:
     def reset_after_healthy(self, session, *, deployment_id):
         self.reset_calls.append(deployment_id)
         return False
+
+    def list_stale_candidate_ids(
+        self,
+        session,
+        *,
+        timeout_seconds,
+    ):
+        self.stale_list_calls.append(timeout_seconds)
+        return list(self.stale_candidate_ids)
+
+    def mark_stale_failed(
+        self,
+        session,
+        *,
+        deployment_id,
+        timeout_seconds,
+    ):
+        self.stale_calls.append((deployment_id, timeout_seconds))
+        return self.stale_claim_result
 
     def mark_completed(self, session, *, deployment_id):
         self.completed.append(deployment_id)
@@ -136,6 +164,7 @@ def run_task(
     rollback_error: Exception | None = None,
     restored_status_code: int = 200,
     recovery_claim_result: bool = True,
+    stale_claim_result: bool = False,
 ):
     deployment_id = uuid4()
     deployment = SimpleNamespace(
@@ -157,6 +186,10 @@ def run_task(
     recovery_repository = FakeRecoveryRepository()
     recovery_state_repository = FakeRecoveryStateRepository(
         claim_result=recovery_claim_result,
+        stale_claim_result=stale_claim_result,
+        stale_candidate_ids=(
+            [deployment_id] if stale_claim_result else []
+        ),
     )
     rollback_calls = []
     restored_deployment_id = uuid4()
@@ -364,4 +397,27 @@ def test_duplicate_recovery_claim_suppresses_rollback(monkeypatch):
     assert state.failed == []
 
     assert session.commits == 1
+    assert session.closed
+
+
+def test_stale_recovery_claim_is_recorded_without_rollback(monkeypatch):
+    """A stale claim is reported without initiating another rollback."""
+    result, session, _, events, calls, deployment_id = run_task(
+        monkeypatch,
+        status_code=200,
+        previous_failures=None,
+        stale_claim_result=True,
+    )
+
+    item = result["results"][0]
+    state = FakeRecoveryStateRepository.last_instance
+
+    assert event_types(events) == ["stale_recovery_claim_detected"]
+    assert calls == []
+    assert result["recovery_candidates"] == 0
+    assert item["stale_recovery_claim_detected"] is True
+    assert events.events[0].details["requires_reconciliation"] is True
+
+    assert state is not None
+    assert state.stale_calls == [(deployment_id, 300.0)]
     assert session.closed

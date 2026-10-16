@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     health_check_timeout_seconds: float = 5.0
     health_check_interval_seconds: float = 60.0
     health_check_failure_threshold: int = Field(default=3, ge=1)
+    recovery_claim_timeout_seconds: float = Field(default=300.0, gt=0)
 
     api_prefix: str = "/api/v1"
 
