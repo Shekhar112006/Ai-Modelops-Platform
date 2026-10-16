@@ -9,6 +9,7 @@ import worker.tasks as task_module
 from backend.app.repositories import (
     deployment_health_check_repository as health_repository_module,
     deployment_recovery_event_repository as recovery_repository_module,
+    deployment_recovery_state_repository as recovery_state_repository_module,
 )
 from backend.app.services import (
     deployment_recovery_executor as executor_module,
@@ -62,6 +63,44 @@ class FakeRecoveryRepository:
         return event
 
 
+class FakeRecoveryStateRepository:
+    """In-memory substitute for recovery-state persistence."""
+
+    last_instance = None
+
+    def __init__(self, claim_result: bool = True) -> None:
+        self.claim_result = claim_result
+        self.claim_calls = []
+        self.reset_calls = []
+        self.completed = []
+        self.failed = []
+        type(self).last_instance = self
+
+    def claim(
+        self,
+        session,
+        *,
+        deployment_id,
+        consecutive_failures,
+    ):
+        self.claim_calls.append(
+            (deployment_id, consecutive_failures)
+        )
+        return self.claim_result
+
+    def reset_after_healthy(self, session, *, deployment_id):
+        self.reset_calls.append(deployment_id)
+        return False
+
+    def mark_completed(self, session, *, deployment_id):
+        self.completed.append(deployment_id)
+        return True
+
+    def mark_failed(self, session, *, deployment_id, error):
+        self.failed.append((deployment_id, error))
+        return True
+
+
 class FakeHTTPClient:
     def __init__(
         self,
@@ -96,6 +135,7 @@ def run_task(
     previous_failures: int | None,
     rollback_error: Exception | None = None,
     restored_status_code: int = 200,
+    recovery_claim_result: bool = True,
 ):
     deployment_id = uuid4()
     deployment = SimpleNamespace(
@@ -115,6 +155,9 @@ def run_task(
     session = FakeSession()
     health_repository = FakeHealthRepository(deployment, previous)
     recovery_repository = FakeRecoveryRepository()
+    recovery_state_repository = FakeRecoveryStateRepository(
+        claim_result=recovery_claim_result,
+    )
     rollback_calls = []
     restored_deployment_id = uuid4()
 
@@ -143,6 +186,11 @@ def run_task(
         recovery_repository_module,
         "DeploymentRecoveryEventRepository",
         lambda: recovery_repository,
+    )
+    monkeypatch.setattr(
+        recovery_state_repository_module,
+        "DeploymentRecoveryStateRepository",
+        lambda: recovery_state_repository,
     )
     monkeypatch.setattr(
         executor_module,
@@ -285,4 +333,35 @@ def test_restoration_verification_failure_is_persisted(
     assert recovery["status"] == "verification_failed"
     assert recovery["restored_health_status_code"] == 503
     assert session.commits == 3
+    assert session.closed
+
+
+def test_duplicate_recovery_claim_suppresses_rollback(monkeypatch):
+    """A task that loses the atomic claim must not initiate rollback."""
+    result, session, _, events, calls, deployment_id = run_task(
+        monkeypatch,
+        status_code=503,
+        previous_failures=2,
+        recovery_claim_result=False,
+    )
+
+    item = result["results"][0]
+    state = FakeRecoveryStateRepository.last_instance
+
+    assert item["recovery_eligible"] is True
+    assert item["recovery_claimed"] is False
+    assert item["recovery"]["attempted"] is False
+    assert item["recovery"]["status"] == "suppressed"
+    assert item["recovery"]["reason"] == "recovery_state_not_idle"
+
+    assert result["recovery_candidates"] == 0
+    assert calls == []
+    assert events.events == []
+
+    assert state is not None
+    assert state.claim_calls == [(deployment_id, 3)]
+    assert state.completed == []
+    assert state.failed == []
+
+    assert session.commits == 1
     assert session.closed

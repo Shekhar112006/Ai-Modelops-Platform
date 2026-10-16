@@ -93,6 +93,9 @@ def check_deployment_health() -> dict[str, object]:
     from backend.app.repositories.deployment_recovery_event_repository import (
         DeploymentRecoveryEventRepository,
     )
+    from backend.app.repositories.deployment_recovery_state_repository import (
+        DeploymentRecoveryStateRepository,
+    )
     from backend.app.services.deployment_recovery_policy import (
         DeploymentRecoveryPolicy,
     )
@@ -103,6 +106,7 @@ def check_deployment_health() -> dict[str, object]:
     session = get_session()
     health_repository = DeploymentHealthCheckRepository()
     recovery_repository = DeploymentRecoveryEventRepository()
+    recovery_state_repository = DeploymentRecoveryStateRepository()
     policy = DeploymentRecoveryPolicy()
 
     checked = 0
@@ -184,6 +188,18 @@ def check_deployment_health() -> dict[str, object]:
                 )
 
                 recovery_eligible = decision.eligible
+                recovery_claimed = False
+                if is_healthy:
+                    recovery_state_repository.reset_after_healthy(
+                        session,
+                        deployment_id=deployment_id,
+                    )
+                elif recovery_eligible:
+                    recovery_claimed = recovery_state_repository.claim(
+                        session,
+                        deployment_id=deployment_id,
+                        consecutive_failures=consecutive_failures,
+                    )
 
                 event_details: dict[str, object] = {
                     "model_name": model_name,
@@ -193,6 +209,7 @@ def check_deployment_health() -> dict[str, object]:
                     "status_code": status_code,
                     "response_time_ms": response_time_ms,
                     "previous_consecutive_failures": previous_failure_count,
+                    "recovery_claimed": recovery_claimed,
                 }
 
                 if error_message is not None:
@@ -235,7 +252,7 @@ def check_deployment_health() -> dict[str, object]:
                     >= settings.health_check_failure_threshold
                 )
 
-                if threshold_crossed:
+                if threshold_crossed and (not recovery_eligible or recovery_claimed):
                     recovery_repository.create(
                         session,
                         deployment_id=deployment_id,
@@ -275,15 +292,23 @@ def check_deployment_health() -> dict[str, object]:
                         details=event_details,
                     )
 
-                recovery_outcome: dict[str, object] = {
-                    "attempted": False,
-                    "status": "not_required",
-                    "reason": decision.reason,
-                }
+                recovery_outcome: dict[str, object]
+                if recovery_eligible and not recovery_claimed:
+                    recovery_outcome = {
+                        "attempted": False,
+                        "status": "suppressed",
+                        "reason": "recovery_state_not_idle",
+                    }
+                else:
+                    recovery_outcome = {
+                        "attempted": False,
+                        "status": "not_required",
+                        "reason": decision.reason,
+                    }
 
                 # Persist the health result and the rollback intent before
                 # invoking the separate asynchronous deployment transaction.
-                if recovery_eligible:
+                if recovery_claimed:
                     recovery_repository.create(
                         session,
                         deployment_id=deployment_id,
@@ -306,7 +331,7 @@ def check_deployment_health() -> dict[str, object]:
                 else:
                     unhealthy_count += 1
 
-                if recovery_eligible:
+                if recovery_claimed:
                     recovery_candidate_count += 1
 
                     try:
@@ -318,8 +343,14 @@ def check_deployment_health() -> dict[str, object]:
                             f"{type(exc).__name__}: {exc}"
                         )[:1000]
 
-                        # The preceding health-check commit is already durable.
+                        # The recovery claim has already been committed.
                         session.rollback()
+
+                        recovery_state_repository.mark_failed(
+                            session,
+                            deployment_id=deployment_id,
+                            error=rollback_error,
+                        )
 
                         recovery_repository.create(
                             session,
@@ -508,6 +539,21 @@ def check_deployment_health() -> dict[str, object]:
                                 "error": verification_error,
                             }
 
+                        if restoration_verified:
+                            recovery_state_repository.mark_completed(
+                                session,
+                                deployment_id=deployment_id,
+                            )
+                        else:
+                            recovery_state_repository.mark_failed(
+                                session,
+                                deployment_id=deployment_id,
+                                error=(
+                                    verification_error
+                                    or "Restoration verification failed."
+                                ),
+                            )
+
                         session.commit()
 
                 results.append(
@@ -519,6 +565,7 @@ def check_deployment_health() -> dict[str, object]:
                         "status": deployment_status,
                         "is_healthy": is_healthy,
                         "recovery_eligible": recovery_eligible,
+                        "recovery_claimed": recovery_claimed,
                         "status_code": status_code,
                         "response_time_ms": response_time_ms,
                         "consecutive_failures": consecutive_failures,

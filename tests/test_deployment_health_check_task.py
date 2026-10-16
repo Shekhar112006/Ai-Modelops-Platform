@@ -12,6 +12,7 @@ from backend.app.services import (
 from backend.app.repositories import (
     deployment_health_check_repository as repository_module,
     deployment_recovery_event_repository as recovery_event_repository_module,
+    deployment_recovery_state_repository as recovery_state_repository_module,
 )
 
 
@@ -72,6 +73,44 @@ class FakeRecoveryEventRepository:
         return event
 
 
+class FakeRecoveryStateRepository:
+    """In-memory substitute for recovery-state persistence."""
+
+    last_instance = None
+
+    def __init__(self, claim_result: bool = True) -> None:
+        self.claim_result = claim_result
+        self.claim_calls = []
+        self.reset_calls = []
+        self.completed = []
+        self.failed = []
+        type(self).last_instance = self
+
+    def claim(
+        self,
+        session,
+        *,
+        deployment_id,
+        consecutive_failures,
+    ):
+        self.claim_calls.append(
+            (deployment_id, consecutive_failures)
+        )
+        return self.claim_result
+
+    def reset_after_healthy(self, session, *, deployment_id):
+        self.reset_calls.append(deployment_id)
+        return False
+
+    def mark_completed(self, session, *, deployment_id):
+        self.completed.append(deployment_id)
+        return True
+
+    def mark_failed(self, session, *, deployment_id, error):
+        self.failed.append((deployment_id, error))
+        return True
+
+
 class FakeHTTPClient:
     """Return a controlled HTTP response for health checks."""
 
@@ -100,6 +139,7 @@ def run_health_check(
     *,
     status_code: int,
     previous_failures: int | None = None,
+    recovery_claim_result: bool = True,
 ):
     deployment = SimpleNamespace(
         id=uuid4(),
@@ -141,10 +181,19 @@ def run_health_check(
     )
 
     fake_recovery_repository = FakeRecoveryEventRepository()
+    fake_recovery_state_repository = FakeRecoveryStateRepository(
+        claim_result=recovery_claim_result,
+    )
+
     monkeypatch.setattr(
         recovery_event_repository_module,
         "DeploymentRecoveryEventRepository",
         lambda: fake_recovery_repository,
+    )
+    monkeypatch.setattr(
+        recovery_state_repository_module,
+        "DeploymentRecoveryStateRepository",
+        lambda: fake_recovery_state_repository,
     )
 
     monkeypatch.setattr(

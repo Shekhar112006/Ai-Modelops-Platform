@@ -20,6 +20,7 @@ from backend.app.models.training_job import TrainingJob  # noqa: F401
 from backend.app.models.deployment import Deployment  # noqa: F401
 from backend.app.models.deployment_health_check import DeploymentHealthCheck  # noqa: F401
 from backend.app.models.deployment_recovery_event import DeploymentRecoveryEvent  # noqa: F401
+from backend.app.models.deployment_recovery_state import DeploymentRecoveryState  # noqa: F401
 
 
 config = context.config
