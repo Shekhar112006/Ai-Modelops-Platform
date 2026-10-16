@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -7,15 +8,32 @@ from fastapi import FastAPI
 from backend.app.api import (health, projects, training, deployment,)
 from backend.app.core.config import settings
 from backend.app.db.session import engine
+from backend.app.core.logging_config import configure_logging
+
+configure_logging("modelops-api")
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage application-wide resources."""
 
-    yield
+    logger.info(
+        "API application started",
+        extra={
+            "event": "api_started",
+            "environment": settings.environment,
+        },
+    )
 
-    await engine.dispose()
+    try:
+        yield
+    finally:
+        logger.info(
+            "API application shutting down",
+            extra={"event": "api_shutting_down"},
+        )
+        await engine.dispose()
 
 
 app = FastAPI(

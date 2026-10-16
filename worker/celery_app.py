@@ -1,8 +1,16 @@
 from __future__ import annotations
 
 from celery import Celery
+from celery.signals import setup_logging
 
 from backend.app.core.config import settings
+from backend.app.core.logging_config import configure_logging
+
+
+@setup_logging.connect
+def configure_celery_logging(**kwargs: object) -> None:
+    """Use shared JSON logging instead of Celery's default formatting."""
+    configure_logging("modelops-worker")
 
 
 celery_app = Celery(

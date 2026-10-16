@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -8,6 +9,9 @@ from worker.celery_app import celery_app
 from backend.app.db.sync_session import get_session
 from backend.app.models.training_job import TrainingJob
 from ml.pipeline import run_model_selection_pipeline
+
+
+logger = logging.getLogger(__name__)
 
 
 @celery_app.task(
@@ -19,6 +23,15 @@ def run_training_job(
     job_id: str,
 ) -> dict[str, object]:
     """Execute a ModelOps training job asynchronously."""
+
+    logger.info(
+        "Training job started",
+        extra={
+            "event": "training_job_started",
+            "job_id": job_id,
+            "task_id": self.request.id,
+        },
+    )
 
     session = get_session()
 
@@ -50,9 +63,29 @@ def run_training_job(
 
         session.commit()
 
+        logger.info(
+            "Training job completed",
+            extra={
+                "event": "training_job_succeeded",
+                "job_id": job_id,
+                "task_id": self.request.id,
+                "model_name": result.get("model_name"),
+                "model_version": result.get("model_version"),
+            },
+        )
+
         return result
 
     except Exception as exc:
+        logger.exception(
+            "Training job failed",
+            extra={
+                "event": "training_job_failed",
+                "job_id": job_id,
+                "task_id": self.request.id,
+                "error_type": type(exc).__name__,
+            },
+        )
         session.rollback()
 
         job = session.get(
@@ -109,6 +142,11 @@ def check_deployment_health() -> dict[str, object]:
     recovery_state_repository = DeploymentRecoveryStateRepository()
     policy = DeploymentRecoveryPolicy()
 
+    logger.info(
+        "Deployment health monitoring started",
+        extra={"event": "health_monitor_started"},
+    )
+
     checked = 0
     healthy_count = 0
     unhealthy_count = 0
@@ -159,6 +197,18 @@ def check_deployment_health() -> dict[str, object]:
                 },
             )
             stale_claims_detected.add(stale_deployment_id)
+
+            logger.error(
+                "Stale recovery claim detected; automatic retry suppressed",
+                extra={
+                    "event": "stale_recovery_claim_detected",
+                    "deployment_id": str(stale_deployment_id),
+                    "claim_timeout_seconds": (
+                        settings.recovery_claim_timeout_seconds
+                    ),
+                    "requires_reconciliation": True,
+                },
+            )
 
         # Make stale-state transitions durable before health checks or
         # rollback only when this task actually marked a claim stale.
@@ -272,6 +322,24 @@ def check_deployment_health() -> dict[str, object]:
                     error_message=error_message,
                 )
 
+                logger.log(
+                    logging.INFO if is_healthy else logging.WARNING,
+                    "Deployment health check completed",
+                    extra={
+                        "event": "deployment_health_check_completed",
+                        "deployment_id": str(deployment_id),
+                        "model_name": model_name,
+                        "model_version": model_version,
+                        "environment": environment,
+                        "deployment_status": deployment_status,
+                        "is_healthy": is_healthy,
+                        "status_code": status_code,
+                        "response_time_ms": response_time_ms,
+                        "consecutive_failures": consecutive_failures,
+                        "error_message": error_message,
+                    },
+                )
+
                 # Report whether the global stale-claim scan marked
                 # this deployment during the current task execution.
                 stale_claim_marked = deployment_id in stale_claims_detected
@@ -325,6 +393,25 @@ def check_deployment_health() -> dict[str, object]:
                         },
                     )
 
+                if threshold_crossed and (
+                    not recovery_eligible or recovery_claimed
+                ):
+                    logger.warning(
+                        "Deployment reached its health failure threshold",
+                        extra={
+                            "event": "failure_threshold_reached",
+                            "deployment_id": str(deployment_id),
+                            "model_name": model_name,
+                            "model_version": model_version,
+                            "consecutive_failures": consecutive_failures,
+                            "failure_threshold": (
+                                settings.health_check_failure_threshold
+                            ),
+                            "recovery_eligible": recovery_eligible,
+                            "recovery_claimed": recovery_claimed,
+                        },
+                    )
+
                 # Record recovery even when no rollback is necessary.
                 if (
                     is_healthy
@@ -373,6 +460,18 @@ def check_deployment_health() -> dict[str, object]:
                         details=event_details,
                     )
 
+                if recovery_claimed:
+                    logger.warning(
+                        "Automated rollback starting",
+                        extra={
+                            "event": "rollback_started",
+                            "deployment_id": str(deployment_id),
+                            "model_name": model_name,
+                            "model_version": model_version,
+                            "environment": environment,
+                        },
+                    )
+
                 session.commit()
 
                 checked += 1
@@ -393,6 +492,15 @@ def check_deployment_health() -> dict[str, object]:
                         rollback_error = (
                             f"{type(exc).__name__}: {exc}"
                         )[:1000]
+
+                        logger.exception(
+                            "Automated rollback execution failed",
+                            extra={
+                                "event": "rollback_failed",
+                                "deployment_id": str(deployment_id),
+                                "error_type": type(exc).__name__,
+                            },
+                        )
 
                         # The recovery claim has already been committed.
                         session.rollback()
@@ -607,6 +715,25 @@ def check_deployment_health() -> dict[str, object]:
 
                         session.commit()
 
+                if recovery_outcome["attempted"]:
+                    recovery_status = recovery_outcome["status"]
+                    recovery_logger = (
+                        logger.info
+                        if recovery_status == "succeeded"
+                        else logger.error
+                    )
+                    recovery_logger(
+                        "Automated recovery attempt finished",
+                        extra={
+                            "event": "automated_recovery_finished",
+                            "deployment_id": str(deployment_id),
+                            "model_name": model_name,
+                            "model_version": model_version,
+                            "recovery_status": recovery_status,
+                            "recovery_reason": recovery_outcome["reason"],
+                        },
+                    )
+
                 results.append(
                     {
                         "deployment_id": str(deployment_id),
@@ -625,6 +752,17 @@ def check_deployment_health() -> dict[str, object]:
                         "recovery": recovery_outcome,
                     }
                 )
+
+        logger.info(
+            "Deployment health monitoring completed",
+            extra={
+                "event": "health_monitor_completed",
+                "checked": checked,
+                "healthy": healthy_count,
+                "unhealthy": unhealthy_count,
+                "recovery_candidates": recovery_candidate_count,
+            },
+        )
 
         return {
             "checked": checked,
