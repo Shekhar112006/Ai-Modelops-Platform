@@ -362,13 +362,153 @@ def check_deployment_health() -> dict[str, object]:
                         )
                         session.commit()
 
-                        recovery_outcome = {
-                            "attempted": True,
-                            "status": "succeeded",
-                            "reason": "rollback_completed",
-                            "deployment_id": rollback_result["deployment_id"],
-                            "deployment_status": rollback_result["status"],
+                        restored_deployment_id = rollback_result.get(
+                            "restored_deployment_id"
+                        )
+                        restored_endpoint = rollback_result.get(
+                            "restored_model_endpoint"
+                        )
+                        restored_status = rollback_result.get(
+                            "restored_status"
+                        )
+                        restored_traffic = str(
+                            rollback_result.get(
+                                "restored_traffic_percentage",
+                                "",
+                            )
+                        )
+
+                        restoration_verified = False
+                        verification_status_code: int | None = None
+                        verification_error: str | None = None
+
+                        try:
+                            if not restored_deployment_id:
+                                raise ValueError(
+                                    "Rollback did not identify the restored deployment."
+                                )
+
+                            if not restored_endpoint:
+                                raise ValueError(
+                                    "Restored deployment has no health endpoint."
+                                )
+
+                            if restored_status not in {"staging", "production"}:
+                                raise ValueError(
+                                    "Restored deployment is not in a stable state: "
+                                    f"{restored_status!r}."
+                                )
+
+                            if restored_traffic != "100":
+                                raise ValueError(
+                                    "Restored deployment does not have 100% traffic: "
+                                    f"{restored_traffic!r}."
+                                )
+
+                            verification_response = client.get(
+                                f"{restored_endpoint.rstrip('/')}/health"
+                            )
+                            verification_status_code = (
+                                verification_response.status_code
+                            )
+                            verification_response.raise_for_status()
+
+                            if not (
+                                200
+                                <= verification_status_code
+                                < 300
+                            ):
+                                raise ValueError(
+                                    "Restored deployment returned an unexpected "
+                                    f"health status: {verification_status_code}."
+                                )
+
+                            restoration_verified = True
+
+                        except Exception as verification_exc:
+                            if isinstance(
+                                verification_exc,
+                                httpx.HTTPStatusError,
+                            ):
+                                verification_status_code = (
+                                    verification_exc.response.status_code
+                                )
+
+                            verification_error = (
+                                f"{type(verification_exc).__name__}: "
+                                f"{verification_exc}"
+                            )[:1000]
+
+                        verification_details: dict[str, object] = {
+                            **event_details,
+                            "rollback_result": rollback_result,
+                            "restored_deployment_id": restored_deployment_id,
+                            "restored_health_status_code": (
+                                verification_status_code
+                            ),
+                            "restoration_verified": restoration_verified,
                         }
+
+                        if verification_error is not None:
+                            verification_details["verification_error"] = (
+                                verification_error
+                            )
+
+                        if restoration_verified:
+                            recovery_repository.create(
+                                session,
+                                deployment_id=deployment_id,
+                                event_type="restoration_verification_succeeded",
+                                severity="info",
+                                message=(
+                                    f"Restored deployment {restored_deployment_id} "
+                                    "passed its health check after rollback."
+                                ),
+                                consecutive_failures=0,
+                                details=verification_details,
+                            )
+
+                            recovery_outcome = {
+                                "attempted": True,
+                                "status": "succeeded",
+                                "reason": "restoration_verified",
+                                "deployment_id": rollback_result["deployment_id"],
+                                "deployment_status": rollback_result["status"],
+                                "restored_deployment_id": restored_deployment_id,
+                                "restored_status": restored_status,
+                                "restored_health_status_code": (
+                                    verification_status_code
+                                ),
+                            }
+
+                        else:
+                            recovery_repository.create(
+                                session,
+                                deployment_id=deployment_id,
+                                event_type="restoration_verification_failed",
+                                severity="error",
+                                message=(
+                                    f"Rollback completed, but restored deployment "
+                                    f"{restored_deployment_id} failed verification."
+                                ),
+                                consecutive_failures=0,
+                                details=verification_details,
+                            )
+
+                            recovery_outcome = {
+                                "attempted": True,
+                                "status": "verification_failed",
+                                "reason": "restoration_verification_failed",
+                                "deployment_id": rollback_result["deployment_id"],
+                                "deployment_status": rollback_result["status"],
+                                "restored_deployment_id": restored_deployment_id,
+                                "restored_health_status_code": (
+                                    verification_status_code
+                                ),
+                                "error": verification_error,
+                            }
+
+                        session.commit()
 
                 results.append(
                     {

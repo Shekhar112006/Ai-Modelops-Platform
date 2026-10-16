@@ -63,8 +63,13 @@ class FakeRecoveryRepository:
 
 
 class FakeHTTPClient:
-    def __init__(self, status_code: int) -> None:
+    def __init__(
+        self,
+        status_code: int,
+        restored_status_code: int = 200,
+    ) -> None:
         self.status_code = status_code
+        self.restored_status_code = restored_status_code
 
     def __enter__(self):
         return self
@@ -73,8 +78,13 @@ class FakeHTTPClient:
         return False
 
     def get(self, url: str):
+        status_code = (
+            self.restored_status_code
+            if "stable-model" in url
+            else self.status_code
+        )
         return httpx.Response(
-            self.status_code,
+            status_code,
             request=httpx.Request("GET", url),
         )
 
@@ -85,6 +95,7 @@ def run_task(
     status_code: int,
     previous_failures: int | None,
     rollback_error: Exception | None = None,
+    restored_status_code: int = 200,
 ):
     deployment_id = uuid4()
     deployment = SimpleNamespace(
@@ -105,6 +116,7 @@ def run_task(
     health_repository = FakeHealthRepository(deployment, previous)
     recovery_repository = FakeRecoveryRepository()
     rollback_calls = []
+    restored_deployment_id = uuid4()
 
     def fake_rollback(requested_id):
         rollback_calls.append(requested_id)
@@ -113,6 +125,12 @@ def run_task(
         return {
             "deployment_id": str(requested_id),
             "status": "rolled_back",
+            "restored_deployment_id": str(restored_deployment_id),
+            "restored_model_name": "demo-classifier",
+            "restored_model_version": "5",
+            "restored_model_endpoint": "http://stable-model:8000",
+            "restored_status": "staging",
+            "restored_traffic_percentage": "100",
         }
 
     monkeypatch.setattr(task_module, "get_session", lambda: session)
@@ -134,7 +152,10 @@ def run_task(
     monkeypatch.setattr(
         httpx,
         "Client",
-        lambda timeout: FakeHTTPClient(status_code),
+        lambda timeout: FakeHTTPClient(
+            status_code,
+            restored_status_code,
+        ),
     )
 
     result = task_module.check_deployment_health()
@@ -165,10 +186,14 @@ def test_threshold_crossing_executes_and_records_rollback(monkeypatch):
         "failure_threshold_reached",
         "rollback_started",
         "rollback_succeeded",
+        "restoration_verification_succeeded",
     ]
     assert result["recovery_candidates"] == 1
     assert result["results"][0]["recovery"]["status"] == "succeeded"
-    assert session.commits == 2
+    assert result["results"][0]["recovery"]["reason"] == (
+        "restoration_verified"
+    )
+    assert session.commits == 3
     assert session.closed
 
 
@@ -228,3 +253,36 @@ def test_recovery_after_failure_is_recorded(monkeypatch):
     assert calls == []
     assert event_types(events) == ["deployment_health_recovered"]
     assert result["results"][0]["consecutive_failures"] == 0
+
+
+def test_restoration_verification_failure_is_persisted(
+    monkeypatch,
+) -> None:
+    """A rollback isn't considered healthy if the restored model returns 503."""
+
+    result, session, _, events, calls, deployment_id = run_task(
+        monkeypatch,
+        status_code=503,
+        previous_failures=2,
+        restored_status_code=503,
+    )
+
+    assert calls == [deployment_id]
+    assert event_types(events) == [
+        "failure_threshold_reached",
+        "rollback_started",
+        "rollback_succeeded",
+        "restoration_verification_failed",
+    ]
+
+    verification_event = events.events[-1]
+    assert verification_event.severity == "error"
+    assert verification_event.details["restored_health_status_code"] == 503
+    assert verification_event.details["restoration_verified"] is False
+
+    recovery = result["results"][0]["recovery"]
+    assert recovery["attempted"] is True
+    assert recovery["status"] == "verification_failed"
+    assert recovery["restored_health_status_code"] == 503
+    assert session.commits == 3
+    assert session.closed

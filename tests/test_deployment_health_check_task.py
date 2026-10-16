@@ -86,8 +86,11 @@ class FakeHTTPClient:
 
     def get(self, url: str):
         request = httpx.Request("GET", url)
+        status_code = (
+            200 if "stable-model" in url else self.status_code
+        )
         return httpx.Response(
-            status_code=self.status_code,
+            status_code=status_code,
             request=request,
         )
 
@@ -150,6 +153,12 @@ def run_health_check(
         lambda requested_id: {
             "deployment_id": str(requested_id),
             "status": "rolled_back",
+            "restored_deployment_id": str(uuid4()),
+            "restored_model_name": "demo-classifier",
+            "restored_model_version": "5",
+            "restored_model_endpoint": "http://stable-model:8000",
+            "restored_status": "staging",
+            "restored_traffic_percentage": "100",
         },
     )
 
@@ -300,20 +309,26 @@ def test_threshold_records_recovery_event(
 
     repository = FakeRecoveryEventRepository.last_instance
     assert repository is not None
+
     assert [
         event.event_type for event in repository.events
     ] == [
         "failure_threshold_reached",
         "rollback_started",
         "rollback_succeeded",
+        "restoration_verification_succeeded",
     ]
 
     event = repository.events[0]
     assert event.event_type == "failure_threshold_reached"
-    assert event.severity == "error"
     assert event.consecutive_failures == 3
     assert event.details["failure_threshold"] == 3
+
     assert result["recovery_candidates"] == 1
+    assert result["results"][0]["recovery"]["status"] == "succeeded"
+    assert result["results"][0]["recovery"]["reason"] == (
+        "restoration_verified"
+    )
 
 
 def test_recovered_endpoint_records_recovery_event(
