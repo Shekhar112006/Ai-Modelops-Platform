@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from worker.celery_app import celery_app
+from worker import task_metrics
 
 from backend.app.db.sync_session import get_session
 from backend.app.models.training_job import TrainingJob
@@ -195,6 +196,10 @@ def check_deployment_health() -> dict[str, object]:
                     ),
                     "requires_reconciliation": True,
                 },
+            )
+            task_metrics.record_recovery_alert(
+                "stale_recovery_claim_detected",
+                severity="error",
             )
             stale_claims_detected.add(stale_deployment_id)
 
@@ -396,7 +401,11 @@ def check_deployment_health() -> dict[str, object]:
                 if threshold_crossed and (
                     not recovery_eligible or recovery_claimed
                 ):
-                    logger.warning(
+                    task_metrics.record_recovery_alert(
+                        "failure_threshold_reached",
+                        severity="error",
+                    )
+                    logger.error(
                         "Deployment reached its health failure threshold",
                         extra={
                             "event": "failure_threshold_reached",
@@ -493,6 +502,10 @@ def check_deployment_health() -> dict[str, object]:
                             f"{type(exc).__name__}: {exc}"
                         )[:1000]
 
+                        task_metrics.record_recovery_alert(
+                            "rollback_failed",
+                            severity="error",
+                        )
                         logger.exception(
                             "Automated rollback execution failed",
                             extra={
@@ -672,6 +685,27 @@ def check_deployment_health() -> dict[str, object]:
                             }
 
                         else:
+                            task_metrics.record_recovery_alert(
+                                "restoration_verification_failed",
+                                severity="error",
+                            )
+                            logger.error(
+                                "Restored deployment failed health verification",
+                                extra={
+                                    "event": "restoration_verification_failed",
+                                    "deployment_id": str(deployment_id),
+                                    "restored_deployment_id": (
+                                        str(restored_deployment_id)
+                                        if restored_deployment_id
+                                        else None
+                                    ),
+                                    "model_name": model_name,
+                                    "model_version": model_version,
+                                    "environment": environment,
+                                    "status_code": verification_status_code,
+                                    "error": verification_error,
+                                },
+                            )
                             recovery_repository.create(
                                 session,
                                 deployment_id=deployment_id,

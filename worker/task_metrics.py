@@ -152,3 +152,39 @@ def mark_worker_process_dead(
 
     if pid is not None:
         multiprocess.mark_process_dead(int(pid))
+
+
+RECOVERY_ALERT_TYPES = frozenset({
+    "failure_threshold_reached",
+    "stale_recovery_claim_detected",
+    "rollback_failed",
+    "restoration_verification_failed",
+})
+
+RECOVERY_ALERTS = Counter(
+    "modelops_recovery_alerts",
+    "Critical deployment recovery alerts by event type and severity.",
+    ["event_type", "severity"],
+)
+
+
+def record_recovery_alert(
+    event_type: str,
+    severity: str = "error",
+) -> None:
+    """Increment metrics for a supported recovery alert."""
+
+    if event_type not in RECOVERY_ALERT_TYPES:
+        raise ValueError(
+            f"Unsupported recovery alert event type: {event_type}"
+        )
+
+    if severity not in {"warning", "error"}:
+        raise ValueError(
+            f"Unsupported recovery alert severity: {severity}"
+        )
+
+    RECOVERY_ALERTS.labels(
+        event_type=event_type,
+        severity=severity,
+    ).inc()

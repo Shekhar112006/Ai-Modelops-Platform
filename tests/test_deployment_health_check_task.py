@@ -142,8 +142,13 @@ class FakeRecoveryStateRepository:
 class FakeHTTPClient:
     """Return a controlled HTTP response for health checks."""
 
-    def __init__(self, status_code: int) -> None:
+    def __init__(
+        self,
+        status_code: int,
+        restored_status_code: int = 200,
+    ) -> None:
         self.status_code = status_code
+        self.restored_status_code = restored_status_code
 
     def __enter__(self):
         return self
@@ -154,7 +159,9 @@ class FakeHTTPClient:
     def get(self, url: str):
         request = httpx.Request("GET", url)
         status_code = (
-            200 if "stable-model" in url else self.status_code
+            self.restored_status_code
+            if "stable-model" in url
+            else self.status_code
         )
         return httpx.Response(
             status_code=status_code,
@@ -169,6 +176,8 @@ def run_health_check(
     previous_failures: int | None = None,
     recovery_claim_result: bool = True,
     stale_claim_result: bool = False,
+    restored_status_code: int = 200,
+    rollback_error: Exception | None = None,
 ):
     deployment = SimpleNamespace(
         id=uuid4(),
@@ -206,7 +215,10 @@ def run_health_check(
     monkeypatch.setattr(
         httpx,
         "Client",
-        lambda timeout: FakeHTTPClient(status_code),
+        lambda timeout: FakeHTTPClient(
+            status_code,
+            restored_status_code=restored_status_code,
+        ),
     )
 
     fake_recovery_repository = FakeRecoveryEventRepository()
@@ -229,10 +241,11 @@ def run_health_check(
         lambda: fake_recovery_state_repository,
     )
 
-    monkeypatch.setattr(
-        recovery_executor_module,
-        "execute_automated_rollback",
-        lambda requested_id: {
+    def fake_execute_rollback(requested_id):
+        if rollback_error is not None:
+            raise rollback_error
+
+        return {
             "deployment_id": str(requested_id),
             "status": "rolled_back",
             "restored_deployment_id": str(uuid4()),
@@ -241,7 +254,12 @@ def run_health_check(
             "restored_model_endpoint": "http://stable-model:8000",
             "restored_status": "staging",
             "restored_traffic_percentage": "100",
-        },
+        }
+
+    monkeypatch.setattr(
+        recovery_executor_module,
+        "execute_automated_rollback",
+        fake_execute_rollback,
     )
 
     result = task_module.check_deployment_health()
