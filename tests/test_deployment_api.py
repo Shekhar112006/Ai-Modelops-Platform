@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import delete
 
@@ -9,9 +11,42 @@ from backend.app.main import app
 from backend.app.db.sync_session import SessionFactory
 from backend.app.models.deployment import Deployment
 from backend.app.models.project import Project
+from backend.app.services.deployment_service import (
+    DeploymentModelNotFoundError,
+    DeploymentService,
+)
 
 
 client = TestClient(app)
+
+
+@pytest.fixture
+def mock_mlflow_registry(monkeypatch) -> None:
+    """Mock model registry lookups for deployment API tests."""
+
+    def fake_get_model_version(
+        self: DeploymentService,
+        model_name: str,
+        model_version: str,
+    ) -> SimpleNamespace:
+        if (
+            model_name == "demo-classifier"
+            and model_version == "4"
+        ):
+            return SimpleNamespace(
+                tags={"validation_status": "passed"}
+            )
+
+        raise DeploymentModelNotFoundError(
+            f"MLflow model '{model_name}' version "
+            f"'{model_version}' was not found."
+        )
+
+    monkeypatch.setattr(
+        DeploymentService,
+        "_get_model_version",
+        fake_get_model_version,
+    )
 
 
 def create_test_project() -> str:
@@ -49,7 +84,7 @@ def cleanup_project(project_id: str) -> None:
         session.commit()
 
 
-def test_create_deployment() -> None:
+def test_create_deployment(mock_mlflow_registry) -> None:
     """A validated MLflow model should create a deployment."""
 
     project_id = create_test_project()
@@ -80,7 +115,7 @@ def test_create_deployment() -> None:
         cleanup_project(project_id)
 
 
-def test_get_deployment() -> None:
+def test_get_deployment(mock_mlflow_registry) -> None:
     """An existing deployment should be retrievable by ID."""
 
     project_id = create_test_project()
@@ -110,7 +145,7 @@ def test_get_deployment() -> None:
         cleanup_project(project_id)
 
 
-def test_list_project_deployments() -> None:
+def test_list_project_deployments(mock_mlflow_registry) -> None:
     """A project's deployment history should contain its deployments."""
 
     project_id = create_test_project()
@@ -146,7 +181,7 @@ def test_list_project_deployments() -> None:
         cleanup_project(project_id)
 
 
-def test_missing_model_returns_404() -> None:
+def test_missing_model_returns_404(mock_mlflow_registry) -> None:
     """A nonexistent MLflow model version should return 404."""
 
     project_id = create_test_project()

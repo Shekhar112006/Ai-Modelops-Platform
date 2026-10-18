@@ -1,7 +1,9 @@
 from __future__ import annotations
-import pytest
 
+from types import SimpleNamespace
 from uuid import UUID
+
+import pytest
 
 from fastapi.testclient import TestClient
 from sqlalchemy import delete
@@ -28,6 +30,38 @@ CANARY_VERSION = "5"
 
 STABLE_ENDPOINT = "http://stable-test:8000"
 CANARY_ENDPOINT = "http://canary-test:8000"
+
+
+@pytest.fixture(autouse=True)
+def mock_mlflow_model_registry(monkeypatch) -> None:
+    """Use deterministic registered models for canary workflow tests."""
+
+    def fake_get_model_version(
+        self: DeploymentService,
+        model_name: str,
+        model_version: str,
+    ) -> SimpleNamespace:
+        if (
+            model_name != MODEL_NAME
+            or model_version not in {
+                STABLE_VERSION,
+                CANARY_VERSION,
+            }
+        ):
+            raise AssertionError(
+                f"Unexpected test model: "
+                f"{model_name!r} version {model_version!r}"
+            )
+
+        return SimpleNamespace(
+            tags={"validation_status": "passed"}
+        )
+
+    monkeypatch.setattr(
+        DeploymentService,
+        "_get_model_version",
+        fake_get_model_version,
+    )
 
 
 def create_test_project() -> UUID:
