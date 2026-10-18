@@ -24,6 +24,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
+    # CI-only configuration values.
+    # These are not production credentials.
+    env:
+      DATABASE_URL: postgresql+psycopg://ci:ci@127.0.0.1:5432/ci_test
+      REDIS_URL: redis://127.0.0.1:6379/0
+      CELERY_RESULT_BACKEND: redis://127.0.0.1:6379/1
+
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
