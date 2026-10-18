@@ -9,6 +9,7 @@ from model_server.schemas import (
     PredictionRequest,
     PredictionResponse,
 )
+from platform_version import PLATFORM_VERSION
 
 
 MODEL_NAME = os.getenv(
@@ -36,7 +37,7 @@ except Exception as exc:
 
 app = FastAPI(
     title="AI ModelOps Model Server",
-    version="0.1.0",
+    version=PLATFORM_VERSION,
 )
 
 

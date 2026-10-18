@@ -23,6 +23,7 @@ from model_router.selector import (
     NoRoutableDeploymentError,
     select_weighted_deployment,
 )
+from platform_version import PLATFORM_VERSION
 
 
 configure_logging("modelops-model-router")
@@ -33,7 +34,7 @@ deployment_repository = DeploymentRepository()
 
 app = FastAPI(
     title="AI ModelOps Model Router",
-    version="0.1.0",
+    version=PLATFORM_VERSION,
 )
 
 install_http_metrics(

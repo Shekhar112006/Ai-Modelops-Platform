@@ -10,6 +10,7 @@ from backend.app.core.config import settings
 from backend.app.db.session import engine
 from backend.app.core.logging_config import configure_logging
 from backend.app.core.metrics import install_http_metrics
+from platform_version import PLATFORM_VERSION
 
 configure_logging("modelops-api")
 logger = logging.getLogger(__name__)
@@ -39,7 +40,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title=settings.app_name,
-    version="0.1.0",
+    version=PLATFORM_VERSION,
     lifespan=lifespan,
 )
 

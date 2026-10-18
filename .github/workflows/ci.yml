@@ -65,6 +65,23 @@ jobs:
           cache: pip
           cache-dependency-path: requirements.txt
 
+      - name: Validate platform version
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          version = Path("VERSION").read_text(encoding="utf-8").strip()
+          pattern = r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
+
+          if not re.fullmatch(pattern, version):
+              raise SystemExit(
+                  f"Invalid semantic version in VERSION: {version!r}"
+              )
+
+          print(f"Validated platform version: {version}")
+          PY
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -88,7 +105,18 @@ jobs:
 
       - name: Build model-server Docker image
         run: |
+          PLATFORM_VERSION="$(tr -d '\r\n' < VERSION)"
+
           docker build \
+            --build-arg PLATFORM_VERSION="${PLATFORM_VERSION}" \
             -f model_server/Dockerfile \
             -t ai-modelops-model-server:ci \
+            -t "ai-modelops-model-server:${PLATFORM_VERSION}" \
             .
+
+          IMAGE_VERSION="$(docker image inspect \
+            "ai-modelops-model-server:${PLATFORM_VERSION}" \
+            --format '{{ index .Config.Labels "org.opencontainers.image.version" }}')"
+
+          test "${IMAGE_VERSION}" = "${PLATFORM_VERSION}"
+          printf 'Validated Docker image version: %s\n' "${IMAGE_VERSION}"
