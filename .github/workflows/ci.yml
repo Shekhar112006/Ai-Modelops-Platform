@@ -103,6 +103,12 @@ jobs:
       - name: Run test suite
         run: python -m pytest -q
 
+      - name: Validate staging deployment script
+        run: |
+          bash -n scripts/deploy-staging.sh
+          ./scripts/deploy-staging.sh --help
+          echo "Staging deployment script validation passed."
+
       - name: Build model-server Docker image
         run: |
           PLATFORM_VERSION="$(tr -d '\r\n' < VERSION)"
