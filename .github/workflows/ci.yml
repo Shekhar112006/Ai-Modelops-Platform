@@ -85,3 +85,10 @@ jobs:
 
       - name: Run test suite
         run: python -m pytest -q
+
+      - name: Build model-server Docker image
+        run: |
+          docker build \
+            -f model_server/Dockerfile \
+            -t ai-modelops-model-server:ci \
+            .
