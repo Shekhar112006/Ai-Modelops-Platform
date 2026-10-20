@@ -126,6 +126,12 @@ jobs:
           ./scripts/deploy-staging.sh --help
           echo "Staging deployment script validation passed."
 
+      - name: Validate release checker
+        run: |
+          bash -n scripts/check-and-deploy-release.sh
+          ./scripts/check-and-deploy-release.sh --help
+          echo "Release checker validation passed."
+
       - name: Build model-server Docker image
         run: |
           PLATFORM_VERSION="$(tr -d '\r\n' < VERSION)"
