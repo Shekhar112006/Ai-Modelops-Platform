@@ -11,10 +11,11 @@ set -Eeuo pipefail
 # Default configuration can be overridden with environment variables.
 # ---------------------------------------------------------------------------
 
-if [[ "${1:-}" == "--help" ]]; then
+show_help() {
     cat <<'HELP'
 Usage:
   ./scripts/deploy-staging.sh
+  ./scripts/deploy-staging.sh --image GHCR_IMAGE
 
 Optional environment variables:
   MODEL_NAME              MLflow registered model name (default: demo-classifier)
@@ -24,22 +25,44 @@ Optional environment variables:
   CANDIDATE_PORT          Temporary candidate port (default: 8007)
   HEALTH_ATTEMPTS         Health-check attempts (default: 30)
 
-The script builds the image specified by VERSION, verifies a candidate
-deployment, then promotes it to staging. A previous container is retained
-until final health and prediction checks pass.
-HELP
-    exit 0
-fi
+Without --image, the script builds the image specified by VERSION.
+With --image, it pulls a semantic-versioned image from this project's
+GHCR repository and verifies its version and source metadata.
 
-if [[ "$#" -ne 0 ]]; then
-    echo "ERROR: Unsupported argument. Run with --help for usage." >&2
-    exit 2
-fi
+Both modes validate a candidate's health and prediction before promotion.
+The previous staging container is retained for recovery until verification.
+HELP
+}
+
+IMAGE_OVERRIDE=""
+
+while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+        --help)
+            show_help
+            exit 0
+            ;;
+        --image)
+            if [[ "$#" -lt 2 || -z "$2" || -n "$IMAGE_OVERRIDE" ]]; then
+                echo "ERROR: --image requires exactly one image reference." >&2
+                exit 2
+            fi
+            IMAGE_OVERRIDE="$2"
+            shift 2
+            ;;
+        *)
+            echo "ERROR: Unsupported argument: $1" >&2
+            echo "Run with --help for usage." >&2
+            exit 2
+            ;;
+    esac
+done
 
 PROJECT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_ROOT"
 
 VERSION="$(tr -d '\r\n' < VERSION)"
+RELEASE_VERSION="${VERSION}"
 IMAGE="ai-modelops-model-server:${VERSION}"
 
 MODEL_NAME="${MODEL_NAME:-demo-classifier}"
@@ -69,6 +92,19 @@ fail() {
     echo "ERROR: $*" >&2
     exit 1
 }
+
+# Only allow version-tagged images from this project's GHCR repository.
+if [[ -n "$IMAGE_OVERRIDE" ]]; then
+    GHCR_IMAGE_REGEX='^ghcr\.io/shekhar112006/ai-modelops-model-server:v?((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))$'
+
+    if [[ ! "$IMAGE_OVERRIDE" =~ $GHCR_IMAGE_REGEX ]]; then
+        fail "Unsupported image. Use a semantic-versioned tag from this project's GHCR repository."
+    fi
+
+    RELEASE_VERSION="${BASH_REMATCH[1]}"
+    IMAGE="$IMAGE_OVERRIDE"
+fi
+
 
 # Restore the old container if promotion fails after cutover begins.
 # This cleanup does not modify the original staging container during
@@ -165,23 +201,37 @@ echo "Staging port:     ${STAGING_PORT}"
 echo "Candidate port:   ${CANDIDATE_PORT}"
 
 echo
-echo "=== Building versioned image ==="
+if [[ -n "$IMAGE_OVERRIDE" ]]; then
+    echo "=== Pulling requested GHCR image ==="
+    docker pull "$IMAGE"
+else
+    echo "=== Building versioned local image ==="
 
-docker build \
-    --build-arg PLATFORM_VERSION="${VERSION}" \
-    -f model_server/Dockerfile \
-    -t "${IMAGE}" \
-    .
+    docker build \
+        --build-arg PLATFORM_VERSION="${VERSION}" \
+        -f model_server/Dockerfile \
+        -t "${IMAGE}" \
+        .
+fi
 
 IMAGE_VERSION="$(
     docker image inspect "${IMAGE}" \
         --format '{{ index .Config.Labels "org.opencontainers.image.version" }}'
 )"
 
-[[ "$IMAGE_VERSION" == "$VERSION" ]] \
-    || fail "Image label '${IMAGE_VERSION}' does not match VERSION '${VERSION}'."
+IMAGE_SOURCE="$(
+    docker image inspect "${IMAGE}" \
+        --format '{{ index .Config.Labels "org.opencontainers.image.source" }}'
+)"
+
+[[ "$IMAGE_VERSION" == "$RELEASE_VERSION" ]] \
+    || fail "Image label '${IMAGE_VERSION}' does not match requested version '${RELEASE_VERSION}'."
+
+[[ "$IMAGE_SOURCE" == "https://github.com/Shekhar112006/Ai-Modelops-Platform" ]] \
+    || fail "Unexpected image source metadata: '${IMAGE_SOURCE}'."
 
 echo "Image version verified: ${IMAGE_VERSION}"
+echo "Image source verified: ${IMAGE_SOURCE}"
 
 verify_health() {
     local port="$1"
@@ -338,7 +388,7 @@ fi
 
 echo
 echo "SUCCESS: Staging deployment completed."
-echo "Version: ${VERSION}"
+echo "Version: ${RELEASE_VERSION}"
 echo "Model:   ${MODEL_NAME}"
 echo "Model version: ${MODEL_VERSION}"
 echo "Endpoint: http://127.0.0.1:${STAGING_PORT}"
