@@ -3,6 +3,7 @@ FROM python:3.14-slim
 ARG PLATFORM_VERSION=dev
 
 LABEL org.opencontainers.image.title="AI ModelOps Model Server" \
+      org.opencontainers.image.source="https://github.com/Shekhar112006/Ai-Modelops-Platform" \
       org.opencontainers.image.version="${PLATFORM_VERSION}"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
