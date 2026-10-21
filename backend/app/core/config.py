@@ -20,6 +20,8 @@ class Settings(BaseSettings):
 
     api_prefix: str = "/api/v1"
 
+    mlflow_tracking_uri: str = "http://127.0.0.1:5000"
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

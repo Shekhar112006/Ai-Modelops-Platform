@@ -53,13 +53,37 @@ def run_training_job(
 
         result = run_model_selection_pipeline()
 
-        job.status = "succeeded"
+        # Persist the selected model details.
         job.selected_model_name = str(
             result["model_name"]
         )
         job.selected_model_version = str(
             result["model_version"]
         )
+        job.selected_candidate = str(
+            result["candidate"]
+        )
+        job.selected_model_id = str(
+            result["model_id"]
+        )
+
+        # Persist the actual metrics returned by the training pipeline.
+        raw_metrics = result.get("metrics", {})
+
+        if not isinstance(raw_metrics, dict):
+            raise TypeError(
+                "Training pipeline returned invalid metrics."
+            )
+
+        job.metrics = {
+            str(name): float(value)
+            for name, value in raw_metrics.items()
+        }
+
+        # A selected candidate means the pipeline passed its quality gate.
+        job.quality_gate_passed = True
+
+        job.status = "succeeded"
         job.completed_at = datetime.now(timezone.utc)
 
         session.commit()

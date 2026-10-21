@@ -2,8 +2,16 @@ from __future__ import annotations
 
 from datetime import datetime
 from uuid import UUID, uuid4
-
-from sqlalchemy import DateTime, ForeignKey, String, Text, Uuid, func
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    JSON,
+    String,
+    Text,
+    Uuid,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.app.db.base import Base
@@ -56,6 +64,26 @@ class TrainingJob(Base):
 
     selected_model_version: Mapped[str | None] = mapped_column(
         String(100),
+        nullable=True,
+    )
+
+    metrics: Mapped[dict[str, float] | None] = mapped_column(
+        JSON,
+        nullable=True,
+    )
+
+    quality_gate_passed: Mapped[bool | None] = mapped_column(
+        Boolean,
+        nullable=True,
+    )
+
+    selected_candidate: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+
+    selected_model_id: Mapped[str | None] = mapped_column(
+        String(255),
         nullable=True,
     )
 

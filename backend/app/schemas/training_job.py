@@ -30,6 +30,10 @@ class TrainingJobRead(BaseModel):
     celery_task_id: str | None
     selected_model_name: str | None
     selected_model_version: str | None
+    metrics: dict[str, float] | None
+    quality_gate_passed: bool | None
+    selected_candidate: str | None
+    selected_model_id: str | None
     error_message: str | None
     created_at: datetime
     started_at: datetime | None
