@@ -16,6 +16,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from backend.app.core.config import settings
 from backend.app.db.base import Base
 from backend.app.models.project import Project  # noqa: F401
+from backend.app.models.dataset import Dataset  # noqa: F401
 from backend.app.models.training_job import TrainingJob  # noqa: F401
 from backend.app.models.deployment import Deployment  # noqa: F401
 from backend.app.models.deployment_health_check import DeploymentHealthCheck  # noqa: F401

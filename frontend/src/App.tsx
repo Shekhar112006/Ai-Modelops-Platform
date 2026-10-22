@@ -1,6 +1,11 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import ProjectsPage from './ProjectsPage'
 import TrainingJobsPage from './TrainingJobsPage'
+import ModelRegistryPage from './ModelRegistryPage'
+import DeploymentPage from './DeploymentPage'
+import PredictionsPage from './PredictionsPage'
+import ObservabilityPage from './ObservabilityPage'
+import DatasetManagementPage from './DatasetManagementPage'
 import './App.css'
 
 const navigation = [
@@ -43,8 +48,42 @@ const services = [
   { name: 'Model server', detail: 'Inference service' },
 ]
 
+const API_BASE_URL = (
+  import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'
+).replace(/\/$/, '')
+
 function App() {
   const [activePage, setActivePage] = useState('Overview')
+  const [apiConnected, setApiConnected] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+
+    const checkApi = async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/health/live`)
+
+        if (!response.ok) {
+          throw new Error(`Health check failed: HTTP ${response.status}`)
+        }
+
+        if (!cancelled) setApiConnected(true)
+      } catch {
+        if (!cancelled) setApiConnected(false)
+      }
+    }
+
+    void checkApi()
+
+    const intervalId = window.setInterval(() => {
+      void checkApi()
+    }, 15000)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(intervalId)
+    }
+  }, [])
 
   const isOverview = activePage === 'Overview'
 
@@ -118,8 +157,10 @@ function App() {
           </div>
           <div className="topbar-right">
             <div className="connection-status">
-              <span className="status-dot status-dot-muted" />
-              <span>API not connected</span>
+              <span
+                className={`status-dot ${apiConnected ? 'status-dot-connected' : 'status-dot-muted'}`}
+              />
+              <span>{apiConnected ? 'API connected' : 'API not connected'}</span>
             </div>
             <button
               className="icon-button"
@@ -257,10 +298,20 @@ function App() {
                 </button>
               </section>
             </>
+          ) : activePage === 'Datasets' ? (
+            <DatasetManagementPage />
           ) : activePage === 'Projects' ? (
             <ProjectsPage />
           ) : activePage === 'Training Jobs' ? (
             <TrainingJobsPage />
+          ) : activePage === 'Model Registry' ? (
+            <ModelRegistryPage />
+          ) : activePage === 'Deployments' ? (
+            <DeploymentPage />
+          ) : activePage === 'Predictions' ? (
+            <PredictionsPage />
+          ) : activePage === 'Observability' ? (
+            <ObservabilityPage />
           ) : (
             <section className="panel section-placeholder">
               <div className="placeholder-icon" aria-hidden="true">

@@ -19,8 +19,20 @@ class Settings(BaseSettings):
     recovery_claim_timeout_seconds: float = Field(default=300.0, gt=0)
 
     api_prefix: str = "/api/v1"
+    dataset_storage_dir: str = "data/datasets"
+    dataset_max_upload_bytes: int = Field(
+        default=20 * 1024 * 1024,
+        gt=0,
+    )
+    dataset_preview_max_rows: int = Field(
+        default=100,
+        ge=1,
+        le=100,
+    )
 
     mlflow_tracking_uri: str = "http://127.0.0.1:5000"
+    model_server_url: str = "http://127.0.0.1:8003"
+    prediction_timeout_seconds: float = Field(default=15.0, gt=0)
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -50,6 +50,22 @@ services:
     volumes:
       - ./mlruns:/home/shekhar/ai-modelops-platform/mlruns:ro
 
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: "/"
+    container_name: modelops-frontend
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8080:80"
+    depends_on:
+      - model-server
+
 volumes:
   modelops-postgres-data:
   modelops-redis-data:

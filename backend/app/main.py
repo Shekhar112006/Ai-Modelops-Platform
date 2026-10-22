@@ -6,7 +6,15 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.app.api import (health, projects, training, deployment,)
+from backend.app.api import (
+    datasets,
+    deployment,
+    health,
+    projects,
+    predictions,
+    registry,
+    training,
+)
 from backend.app.core.config import settings
 from backend.app.db.session import engine
 from backend.app.core.logging_config import configure_logging
@@ -79,9 +87,27 @@ app.include_router(
 )
 
 app.include_router(
+    predictions.router,
+    prefix="/api/v1",
+    tags=["predictions"],
+)
+
+app.include_router(
     deployment.router,
     prefix="/api/v1",
     tags=["deployments"],
+)
+
+app.include_router(
+    registry.router,
+    prefix="/api/v1/registry",
+    tags=["registry"],
+)
+
+app.include_router(
+    datasets.router,
+    prefix="/api/v1",
+    tags=["datasets"],
 )
 
 @app.get("/")
