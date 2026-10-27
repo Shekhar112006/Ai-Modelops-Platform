@@ -16,7 +16,11 @@ from fastapi import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.db.session import get_session
-from backend.app.schemas.dataset import DatasetPreview, DatasetRead
+from backend.app.schemas.dataset import (
+    DatasetPreview,
+    DatasetRead,
+    DatasetValidationReport,
+)
 from backend.app.services.dataset_service import (
     DatasetNotFoundError,
     DatasetService,
@@ -169,3 +173,31 @@ async def preview_dataset(
         preview_rows=rows,
         preview_limit=limit,
     )
+
+@router.get(
+    "/datasets/{dataset_id}/validate",
+    response_model=DatasetValidationReport,
+)
+async def validate_dataset(
+    dataset_id: UUID,
+    session: SessionDep,
+) -> DatasetValidationReport:
+    """Return a data-quality and profiling report for a dataset."""
+
+    try:
+        report = await dataset_service.validate_dataset(
+            session=session,
+            dataset_id=dataset_id,
+        )
+    except DatasetNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except DatasetValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    return report

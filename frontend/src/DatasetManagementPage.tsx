@@ -34,6 +34,36 @@ interface DatasetPreview {
   preview_limit: number
 }
 
+interface DatasetValidationIssue {
+  severity: string
+  code: string
+  message: string
+  column: string | null
+}
+
+interface DatasetColumnProfile {
+  name: string
+  inferred_type: string
+  missing_count: number
+  unique_count: number
+}
+
+interface DatasetValidationSummary {
+  total_rows: number
+  total_columns: number
+  missing_cells: number
+  duplicate_rows: number
+}
+
+interface DatasetValidationReport {
+  dataset_id: string
+  name: string
+  is_valid: boolean
+  summary: DatasetValidationSummary
+  columns: DatasetColumnProfile[]
+  issues: DatasetValidationIssue[]
+}
+
 const API_BASE_URL = (
   import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'
 ).replace(/\/$/, '')
@@ -83,6 +113,10 @@ function DatasetManagementPage() {
   const [datasets, setDatasets] = useState<Dataset[]>([])
   const [selectedDatasetId, setSelectedDatasetId] = useState('')
   const [preview, setPreview] = useState<DatasetPreview | null>(null)
+
+  const [validationReport, setValidationReport] =
+    useState<DatasetValidationReport | null>(null)
+  const [loadingValidation, setLoadingValidation] = useState(false)
 
   const [datasetName, setDatasetName] = useState('')
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
@@ -134,6 +168,7 @@ function DatasetManagementPage() {
       setDatasets([])
       setSelectedDatasetId('')
       setPreview(null)
+      setValidationReport(null)
       setLoadingDatasets(false)
       return
     }
@@ -141,6 +176,7 @@ function DatasetManagementPage() {
     setLoadingDatasets(true)
     setError('')
     setPreview(null)
+    setValidationReport(null)
 
     try {
       const response = await fetch(
@@ -171,6 +207,7 @@ function DatasetManagementPage() {
       setDatasets([])
       setSelectedDatasetId('')
       setPreview(null)
+      setValidationReport(null)
       setError(getErrorMessage(err))
     } finally {
       setLoadingDatasets(false)
@@ -206,6 +243,48 @@ function DatasetManagementPage() {
     }
   }, [])
 
+  // Run validation and profiling against the selected dataset.
+  const validateSelectedDataset = useCallback(async () => {
+    if (!selectedDatasetId) {
+      setError('Select a dataset before running validation.')
+      return
+    }
+
+    setLoadingValidation(true)
+    setValidationReport(null)
+    setError('')
+    setSuccess('')
+
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/api/v1/datasets/${selectedDatasetId}/validate`,
+      )
+
+      if (!response.ok) {
+        throw new Error(await getResponseError(response))
+      }
+
+      const report =
+        await response.json() as DatasetValidationReport
+
+      // Ignore a result if the user selected another dataset while waiting.
+      setValidationReport((current) => {
+        if (report.dataset_id !== selectedDatasetId) {
+          return current
+        }
+
+        return report
+      })
+
+      setSuccess(`Profiling completed for "${report.name}".`)
+    } catch (err) {
+      setValidationReport(null)
+      setError(getErrorMessage(err))
+    } finally {
+      setLoadingValidation(false)
+    }
+  }, [selectedDatasetId])
+
   useEffect(() => {
     void loadProjects()
   }, [loadProjects])
@@ -215,6 +294,8 @@ function DatasetManagementPage() {
   }, [selectedProjectId, loadDatasets])
 
   useEffect(() => {
+    // A report belongs to one dataset only.
+    setValidationReport(null)
     void loadPreview(selectedDatasetId)
   }, [selectedDatasetId, loadPreview])
 
@@ -263,7 +344,9 @@ function DatasetManagementPage() {
         created,
         ...current.filter((dataset) => dataset.id !== created.id),
       ])
+
       setSelectedDatasetId(created.id)
+      setValidationReport(null)
       setDatasetName('')
       setSelectedFile(null)
 
@@ -294,6 +377,7 @@ function DatasetManagementPage() {
 
   return (
     <section className="datasets-page">
+      {/* Dataset overview */}
       <div className="datasets-summary-grid">
         <article className="dataset-stat-card">
           <span className="dataset-stat-icon">▤</span>
@@ -334,6 +418,7 @@ function DatasetManagementPage() {
         </article>
       </div>
 
+      {/* Notifications */}
       {error && (
         <div className="dataset-message dataset-message-error" role="alert">
           <span aria-hidden="true">!</span>
@@ -362,6 +447,7 @@ function DatasetManagementPage() {
         </div>
       )}
 
+      {/* Upload dataset */}
       <article className="dataset-panel">
         <div className="dataset-panel-heading">
           <div>
@@ -379,6 +465,7 @@ function DatasetManagementPage() {
               onChange={(event) => {
                 setSelectedProjectId(event.target.value)
                 setSuccess('')
+                setValidationReport(null)
               }}
               disabled={loadingProjects || projects.length === 0}
               required
@@ -448,6 +535,7 @@ function DatasetManagementPage() {
         </form>
       </article>
 
+      {/* Dataset library */}
       <article className="dataset-panel">
         <div className="dataset-panel-heading dataset-library-heading">
           <div>
@@ -554,8 +642,9 @@ function DatasetManagementPage() {
         </div>
       </article>
 
+      {/* Dataset preview */}
       <article className="dataset-panel dataset-preview-panel">
-        <div className="dataset-panel-heading">
+        <div className="dataset-panel-heading dataset-preview-heading">
           <div>
             <h2>Data preview</h2>
             <p>
@@ -564,11 +653,29 @@ function DatasetManagementPage() {
                 : 'Choose a dataset from the library to inspect its contents.'}
             </p>
           </div>
-          <span className="dataset-preview-count">
-            {preview
-              ? `${preview.preview_rows.length} / ${preview.row_count.toLocaleString()} rows`
-              : 'CSV preview'}
-          </span>
+
+          <div className="dataset-validation-actions">
+            <span className="dataset-preview-count">
+              {preview
+                ? `${preview.preview_rows.length} / ${preview.row_count.toLocaleString()} rows`
+                : 'CSV preview'}
+            </span>
+
+            <button
+              className="dataset-button dataset-button-primary"
+              type="button"
+              onClick={() => void validateSelectedDataset()}
+              disabled={
+                !selectedDatasetId ||
+                loadingValidation ||
+                loadingDatasets
+              }
+            >
+              {loadingValidation
+                ? 'Analyzing…'
+                : '✓ Validate dataset'}
+            </button>
+          </div>
         </div>
 
         {loadingPreview ? (
@@ -579,6 +686,7 @@ function DatasetManagementPage() {
               <span>{preview.columns.length} columns</span>
               <span>Read-only preview</span>
             </div>
+
             <div className="dataset-table-scroll dataset-preview-scroll">
               <table className="dataset-table dataset-data-table">
                 <thead>
@@ -602,6 +710,7 @@ function DatasetManagementPage() {
                       ))}
                     </tr>
                   ))}
+
                   {preview.preview_rows.length === 0 && (
                     <tr>
                       <td
@@ -615,6 +724,7 @@ function DatasetManagementPage() {
                 </tbody>
               </table>
             </div>
+
             <p className="dataset-preview-footnote">
               Preview only. The full dataset remains stored on the server.
             </p>
@@ -624,6 +734,231 @@ function DatasetManagementPage() {
             <span className="dataset-empty-icon">⌕</span>
             <strong>No preview selected</strong>
             <span>Select a dataset and its sample rows will appear here.</span>
+          </div>
+        )}
+      </article>
+
+      {/* Validation and profiling report */}
+      <article className="dataset-panel dataset-validation-panel">
+        <div className="dataset-panel-heading">
+          <div>
+            <h2>Dataset validation &amp; profiling</h2>
+            <p>
+              Inspect column types, missing values, duplicates, and
+              data-quality warnings.
+            </p>
+          </div>
+
+          <span className="dataset-heading-icon" aria-hidden="true">✓</span>
+        </div>
+
+        {loadingValidation && (
+          <div className="dataset-validation-loading" role="status">
+            <span className="dataset-validation-spinner" />
+            <div>
+              <strong>Analyzing dataset…</strong>
+              <p>
+                Checking data quality and profiling columns. Larger datasets
+                may take longer.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {!loadingValidation && !validationReport && (
+          <div className="dataset-validation-empty">
+            <span className="dataset-empty-icon">⌕</span>
+            <strong>No profiling report yet</strong>
+            <span>
+              {selectedDataset
+                ? `Select “Validate dataset” to analyze ${selectedDataset.name}.`
+                : 'Select a dataset, then run validation to generate a report.'}
+            </span>
+          </div>
+        )}
+
+        {validationReport && (
+          <div className="dataset-validation-results">
+            <div className="dataset-validation-report-heading">
+              <div>
+                <span className="dataset-stat-label">Profiling report</span>
+                <h3>{validationReport.name}</h3>
+                <p>
+                  Analysis of{' '}
+                  {validationReport.summary.total_rows.toLocaleString()}{' '}
+                  rows and{' '}
+                  {validationReport.summary.total_columns.toLocaleString()}{' '}
+                  columns.
+                </p>
+              </div>
+
+              <span
+                className={`dataset-validation-badge ${
+                  validationReport.is_valid
+                    ? 'dataset-validation-badge-complete'
+                    : 'dataset-validation-badge-failed'
+                }`}
+              >
+                {validationReport.is_valid
+                  ? '✓ Analysis completed'
+                  : 'Needs attention'}
+              </span>
+            </div>
+
+            {/* Quality metrics */}
+            <div className="dataset-validation-stats">
+              <div className="dataset-validation-stat">
+                <span>Total rows</span>
+                <strong>
+                  {validationReport.summary.total_rows.toLocaleString()}
+                </strong>
+              </div>
+
+              <div className="dataset-validation-stat">
+                <span>Total columns</span>
+                <strong>
+                  {validationReport.summary.total_columns.toLocaleString()}
+                </strong>
+              </div>
+
+              <div className="dataset-validation-stat">
+                <span>Missing cells</span>
+                <strong
+                  className={
+                    validationReport.summary.missing_cells > 0
+                      ? 'dataset-metric-warning'
+                      : ''
+                  }
+                >
+                  {validationReport.summary.missing_cells.toLocaleString()}
+                </strong>
+              </div>
+
+              <div className="dataset-validation-stat">
+                <span>Duplicate rows</span>
+                <strong
+                  className={
+                    validationReport.summary.duplicate_rows > 0
+                      ? 'dataset-metric-warning'
+                      : ''
+                  }
+                >
+                  {validationReport.summary.duplicate_rows.toLocaleString()}
+                </strong>
+              </div>
+            </div>
+
+            {/* Column profiling table */}
+            <div className="dataset-validation-section">
+              <div className="dataset-validation-section-heading">
+                <h3>Column profiles</h3>
+                <span>
+                  {validationReport.columns.length} columns analyzed
+                </span>
+              </div>
+
+              {validationReport.columns.length === 0 ? (
+                <p className="dataset-validation-note">
+                  No column profiles are available for this dataset.
+                </p>
+              ) : (
+                <div className="dataset-table-scroll">
+                  <table className="dataset-table dataset-profile-table">
+                    <thead>
+                      <tr>
+                        <th>Column</th>
+                        <th>Inferred type</th>
+                        <th>Missing values</th>
+                        <th>Unique values</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {validationReport.columns.map((column) => (
+                        <tr key={column.name}>
+                          <td>
+                            <strong>{column.name}</strong>
+                          </td>
+                          <td>
+                            <span className="dataset-type-badge">
+                              {column.inferred_type}
+                            </span>
+                          </td>
+                          <td>
+                            <span
+                              className={
+                                column.missing_count > 0
+                                  ? 'dataset-profile-warning'
+                                  : 'dataset-profile-good'
+                              }
+                            >
+                              {column.missing_count.toLocaleString()}
+                            </span>
+                          </td>
+                          <td>{column.unique_count.toLocaleString()}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {/* Quality issues */}
+            <div className="dataset-validation-section">
+              <div className="dataset-validation-section-heading">
+                <h3>Data-quality issues</h3>
+                <span>
+                  {validationReport.issues.length}{' '}
+                  {validationReport.issues.length === 1 ? 'issue' : 'issues'}
+                </span>
+              </div>
+
+              {validationReport.issues.length === 0 ? (
+                <div className="dataset-validation-clean">
+                  <span aria-hidden="true">✓</span>
+                  <div>
+                    <strong>No issues detected</strong>
+                    <p>
+                      No missing values, duplicate rows, or unknown column
+                      types were reported by the current checks.
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div className="dataset-validation-issues">
+                  {validationReport.issues.map((issue, index) => (
+                    <div
+                      className={`dataset-validation-issue dataset-issue-${issue.severity.toLowerCase()}`}
+                      key={`${issue.code}-${issue.column ?? 'dataset'}-${index}`}
+                    >
+                      <span className="dataset-issue-indicator">
+                        {issue.severity.toLowerCase() === 'error'
+                          ? '!'
+                          : '⚠'}
+                      </span>
+
+                      <div className="dataset-issue-content">
+                        <div className="dataset-issue-heading">
+                          <strong>{issue.code.replace(/_/g, ' ')}</strong>
+                          <span>{issue.severity}</span>
+                        </div>
+
+                        <p>{issue.message}</p>
+
+                        {issue.column && (
+                          <small>Column: {issue.column}</small>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <p className="dataset-preview-footnote">
+              This report is read-only. It identifies potential data-quality
+              issues but does not modify the original CSV file.
+            </p>
           </div>
         )}
       </article>

@@ -542,3 +542,338 @@
     padding: 15px;
   }
 }
+
+
+/* Dataset validation and profiling */
+
+.dataset-validation-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.dataset-validation-panel {
+  min-width: 0;
+}
+
+.dataset-validation-loading,
+.dataset-validation-clean {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 20px;
+  border: 1px solid var(--border-color, #dbe3ed);
+  border-radius: 12px;
+  background: var(--surface-secondary, #f8fafc);
+}
+
+.dataset-validation-loading strong,
+.dataset-validation-clean strong {
+  display: block;
+  margin-bottom: 5px;
+}
+
+.dataset-validation-loading p,
+.dataset-validation-clean p {
+  margin: 0;
+  line-height: 1.6;
+  color: var(--text-secondary, #64748b);
+}
+
+.dataset-validation-spinner {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  border: 3px solid #dbeafe;
+  border-top-color: #2563eb;
+  border-radius: 50%;
+  animation: dataset-validation-spin 0.8s linear infinite;
+}
+
+@keyframes dataset-validation-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.dataset-validation-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 9px;
+  padding: 34px 20px;
+  text-align: center;
+  color: var(--text-secondary, #64748b);
+}
+
+.dataset-validation-empty strong {
+  color: var(--text-primary, #1e293b);
+}
+
+.dataset-validation-empty > span:last-child {
+  max-width: 440px;
+  line-height: 1.6;
+}
+
+.dataset-validation-results {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.dataset-validation-report-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+
+.dataset-validation-report-heading h3 {
+  margin: 7px 0;
+  font-size: 1.15rem;
+  overflow-wrap: anywhere;
+}
+
+.dataset-validation-report-heading p {
+  margin: 0;
+  color: var(--text-secondary, #64748b);
+  line-height: 1.6;
+}
+
+.dataset-validation-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 11px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.dataset-validation-badge-complete {
+  color: #166534;
+  background: #dcfce7;
+}
+
+.dataset-validation-badge-failed {
+  color: #991b1b;
+  background: #fee2e2;
+}
+
+.dataset-validation-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.dataset-validation-stat {
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-radius: 12px;
+  background: var(--surface-secondary, #f8fafc);
+}
+
+.dataset-validation-stat > span {
+  display: block;
+  margin-bottom: 10px;
+  color: var(--text-secondary, #64748b);
+  font-size: 0.84rem;
+}
+
+.dataset-validation-stat > strong {
+  display: block;
+  font-size: 1.65rem;
+  overflow-wrap: anywhere;
+}
+
+.dataset-validation-stat .dataset-metric-warning {
+  color: #b45309;
+}
+
+.dataset-validation-section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+.dataset-validation-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.dataset-validation-section-heading h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.dataset-validation-section-heading > span {
+  color: var(--text-secondary, #64748b);
+  font-size: 0.84rem;
+}
+
+.dataset-profile-table td,
+.dataset-profile-table th {
+  white-space: nowrap;
+}
+
+.dataset-profile-table td:first-child {
+  max-width: 300px;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.dataset-type-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 9px;
+  border-radius: 6px;
+  background: var(--surface-secondary, #f1f5f9);
+  color: var(--text-primary, #334155);
+  font-family: monospace;
+  font-size: 0.82rem;
+}
+
+.dataset-profile-warning {
+  color: #b45309;
+  font-weight: 700;
+}
+
+.dataset-profile-good {
+  color: #15803d;
+}
+
+.dataset-validation-clean {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+}
+
+.dataset-validation-clean > span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: #dcfce7;
+  color: #166534;
+  font-weight: 700;
+}
+
+.dataset-validation-issues {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dataset-validation-issue {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 15px;
+  border: 1px solid #fde68a;
+  border-radius: 10px;
+  background: #fffbeb;
+}
+
+.dataset-issue-error {
+  border-color: #fecaca;
+  background: #fef2f2;
+}
+
+.dataset-issue-indicator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: #fef3c7;
+  color: #92400e;
+  font-weight: 700;
+}
+
+.dataset-issue-error .dataset-issue-indicator {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.dataset-issue-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.dataset-issue-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.dataset-issue-heading strong {
+  text-transform: capitalize;
+  overflow-wrap: anywhere;
+}
+
+.dataset-issue-heading > span {
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.dataset-issue-content p {
+  margin: 7px 0;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.dataset-issue-content small {
+  color: var(--text-secondary, #64748b);
+}
+
+.dataset-validation-note {
+  margin: 0;
+  color: var(--text-secondary, #64748b);
+  line-height: 1.6;
+}
+
+@media (max-width: 900px) {
+  .dataset-validation-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 600px) {
+  .dataset-validation-stats {
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+
+  .dataset-validation-stat {
+    padding: 13px;
+  }
+
+  .dataset-validation-stat > strong {
+    font-size: 1.35rem;
+  }
+
+  .dataset-validation-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .dataset-validation-actions .dataset-button {
+    flex: 1;
+  }
+}

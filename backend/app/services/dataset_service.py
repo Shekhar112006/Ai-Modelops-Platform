@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import math
 import os
+import re
+from collections import Counter
+from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -13,6 +18,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.core.config import settings
 from backend.app.models.dataset import Dataset
 from backend.app.models.project import Project
+from backend.app.schemas.dataset import (
+    DatasetColumnProfile,
+    DatasetValidationIssue,
+    DatasetValidationReport,
+    DatasetValidationSummary,
+)
 
 
 class DatasetValidationError(Exception):
@@ -366,3 +377,275 @@ class DatasetService:
             ) from exc
 
         return dataset, rows
+
+    @staticmethod
+    def _is_missing(value: str | None) -> bool:
+        """Return whether a CSV cell represents a missing value."""
+        if value is None:
+            return True
+
+        normalized = value.strip().casefold()
+
+        if not normalized:
+            return True
+
+        missing_markers = {
+            "na",
+            "n/a",
+            "null",
+            "none",
+            "nan",
+        }
+
+        return normalized in missing_markers
+
+    @staticmethod
+    def _infer_column_type(values: list[str]) -> str:
+        """Infer a practical data type from non-missing CSV values."""
+        if not values:
+            return "unknown"
+
+        normalized = [value.strip() for value in values]
+
+        boolean_values = {"true", "false", "yes", "no"}
+        if all(value.lower() in boolean_values for value in normalized):
+            return "boolean"
+
+        try:
+            for value in normalized:
+                int(value)
+            return "integer"
+        except ValueError:
+            pass
+
+        try:
+            for value in normalized:
+                number = Decimal(value)
+                if not number.is_finite():
+                    raise InvalidOperation
+            return "float"
+        except (InvalidOperation, ValueError):
+            pass
+
+        date_formats = (
+            "%Y-%m-%d",
+            "%Y/%m/%d",
+            "%d-%m-%Y",
+            "%d/%m/%Y",
+        )
+
+        for date_format in date_formats:
+            try:
+                for value in normalized:
+                    datetime.strptime(value, date_format)
+                return "date"
+            except ValueError:
+                continue
+
+        return "string"
+
+    @staticmethod
+    def _get_inconsistent_numeric_values(
+        values: list[str],
+    ) -> tuple[int, list[str]]:
+        """Find invalid values when a column is predominantly numeric."""
+        if not values:
+            return 0, []
+
+        numeric_count = 0
+        invalid_values: list[str] = []
+
+        for value in values:
+            normalized = value.strip()
+
+            try:
+                number = Decimal(normalized)
+                if number.is_finite():
+                    numeric_count += 1
+                else:
+                    invalid_values.append(normalized)
+            except (InvalidOperation, ValueError):
+                invalid_values.append(normalized)
+
+        total_count = numeric_count + len(invalid_values)
+
+        # Avoid false positives in predominantly categorical columns.
+        if (
+            numeric_count > 0
+            and invalid_values
+            and numeric_count / total_count >= 0.75
+        ):
+            return len(invalid_values), invalid_values[:3]
+
+        return 0, []
+
+
+    async def validate_dataset(
+        self,
+        session: AsyncSession,
+        dataset_id: UUID,
+    ) -> DatasetValidationReport:
+        """Build a read-only data-quality and profiling report."""
+        dataset = await self.get_dataset(session, dataset_id)
+
+        file_path = Path(dataset.storage_path).resolve()
+
+        if (
+            file_path.parent != self.storage_dir
+            or not file_path.is_file()
+        ):
+            raise DatasetValidationError(
+                "The stored dataset file is missing or unavailable."
+            )
+
+        try:
+            with file_path.open(
+                "r",
+                encoding="utf-8-sig",
+                newline="",
+            ) as source:
+                reader = csv.DictReader(source)
+
+                if not reader.fieldnames:
+                    raise DatasetValidationError(
+                        "The dataset has no header row."
+                    )
+
+                column_names = reader.fieldnames
+                column_values = {
+                    column: [] for column in column_names
+                }
+                row_signatures: Counter[tuple[str | None, ...]] = Counter()
+
+                total_rows = 0
+                missing_cells = 0
+
+                for row in reader:
+                    total_rows += 1
+
+                    signature = tuple(
+                        (
+                            (True, None)
+                            if self._is_missing(row.get(column))
+                            else (False, row.get(column))
+                        )
+                        for column in column_names
+                    )
+                    row_signatures[signature] += 1
+
+                    for column in column_names:
+                        value = row.get(column)
+
+                        if self._is_missing(value):
+                            missing_cells += 1
+                        else:
+                            column_values[column].append(value.strip())
+
+        except (
+            UnicodeDecodeError,
+            csv.Error,
+            OSError,
+        ) as exc:
+            raise DatasetValidationError(
+                "The stored dataset could not be read."
+            ) from exc
+
+        column_profiles: list[DatasetColumnProfile] = []
+        issues: list[DatasetValidationIssue] = []
+
+        for column in column_names:
+            values = column_values[column]
+
+            missing_count = total_rows - len(values)
+            inferred_type = self._infer_column_type(values)
+            unique_count = len(set(values))
+
+            column_profiles.append(
+                DatasetColumnProfile(
+                    name=column,
+                    inferred_type=inferred_type,
+                    missing_count=missing_count,
+                    unique_count=unique_count,
+                )
+            )
+
+            if missing_count:
+                issues.append(
+                    DatasetValidationIssue(
+                        severity="warning",
+                        code="missing_values",
+                        message=(
+                            f"Column '{column}' contains "
+                            f"{missing_count} missing value(s)."
+                        ),
+                        column=column,
+                    )
+                )
+
+            if inferred_type == "unknown":
+                issues.append(
+                    DatasetValidationIssue(
+                        severity="warning",
+                        code="unknown_type",
+                        message=(
+                            f"Column '{column}' has no non-missing "
+                            "values from which to infer a type."
+                        ),
+                        column=column,
+                    )
+                )
+            
+            inconsistent_count, invalid_examples = (
+                self._get_inconsistent_numeric_values(values)
+            )
+
+            if inconsistent_count:
+                examples = ", ".join(
+                    repr(value) for value in invalid_examples
+                )
+
+                issues.append(
+                    DatasetValidationIssue(
+                        severity="warning",
+                        code="inconsistent_values",
+                        message=(
+                            f"Column '{column}' contains "
+                            f"{inconsistent_count} non-numeric value(s) "
+                            f"among its non-missing values. "
+                            f"Examples: {examples}."
+                        ),
+                        column=column,
+                    )
+                )
+
+        duplicate_rows = sum(
+            count - 1
+            for count in row_signatures.values()
+            if count > 1
+        )
+
+        if duplicate_rows:
+            issues.append(
+                DatasetValidationIssue(
+                    severity="warning",
+                    code="duplicate_rows",
+                    message=(
+                        f"The dataset contains {duplicate_rows} "
+                        "duplicate row(s) beyond their first occurrence."
+                    ),
+                )
+            )
+
+        return DatasetValidationReport(
+            dataset_id=dataset.id,
+            name=dataset.name,
+            is_valid=True,
+            summary=DatasetValidationSummary(
+                total_rows=total_rows,
+                total_columns=len(column_names),
+                missing_cells=missing_cells,
+                duplicate_rows=duplicate_rows,
+            ),
+            columns=column_profiles,
+            issues=issues,
+        )

@@ -34,3 +34,40 @@ class DatasetPreview(BaseModel):
     row_count: int
     preview_rows: list[dict[str, str | None]]
     preview_limit: int = Field(ge=1, le=100)
+
+class DatasetValidationIssue(BaseModel):
+    """A data-quality issue discovered during dataset validation."""
+
+    severity: str
+    code: str
+    message: str
+    column: str | None = None
+
+
+class DatasetColumnProfile(BaseModel):
+    """Quality and type statistics for one dataset column."""
+
+    name: str
+    inferred_type: str
+    missing_count: int
+    unique_count: int
+
+
+class DatasetValidationSummary(BaseModel):
+    """Aggregate statistics for a dataset."""
+
+    total_rows: int
+    total_columns: int
+    missing_cells: int
+    duplicate_rows: int
+
+
+class DatasetValidationReport(BaseModel):
+    """Read-only validation and profiling report for a dataset."""
+
+    dataset_id: UUID
+    name: str
+    is_valid: bool
+    summary: DatasetValidationSummary
+    columns: list[DatasetColumnProfile]
+    issues: list[DatasetValidationIssue]
