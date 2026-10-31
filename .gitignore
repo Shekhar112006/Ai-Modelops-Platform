@@ -16,3 +16,4 @@ mlruns/
 le
 # Celery Beat runtime files
 celerybeat-schedule*
+data/datasets/

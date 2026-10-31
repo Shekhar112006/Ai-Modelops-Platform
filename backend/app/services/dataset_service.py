@@ -38,6 +38,94 @@ class ProjectNotFoundError(Exception):
     """Raised when the requested project does not exist."""
 
 
+class ColumnProfilingState:
+    """Incrementally profile a CSV column without storing every value."""
+
+    BOOLEAN_VALUES = {"true", "false", "yes", "no"}
+
+    DATE_FORMATS = (
+        "%Y-%m-%d",
+        "%Y/%m/%d",
+        "%d-%m-%Y",
+        "%d/%m/%Y",
+    )
+
+    def __init__(self) -> None:
+        self.value_count = 0
+        self.unique_values: set[str] = set()
+
+        self.is_boolean = True
+        self.is_integer = True
+        self.is_float = True
+        self.date_formats_valid = [True] * len(self.DATE_FORMATS)
+
+        self.numeric_count = 0
+        self.invalid_numeric_count = 0
+        self.invalid_numeric_examples: list[str] = []
+
+    def add_value(self, value: str) -> None:
+        value = value.strip()
+        self.value_count += 1
+        self.unique_values.add(value)
+
+        if value.lower() not in self.BOOLEAN_VALUES:
+            self.is_boolean = False
+
+        try:
+            int(value)
+        except ValueError:
+            self.is_integer = False
+
+        try:
+            number = Decimal(value)
+            if number.is_finite():
+                self.numeric_count += 1
+            else:
+                self._record_invalid_numeric(value)
+                self.is_float = False
+        except (InvalidOperation, ValueError):
+            self._record_invalid_numeric(value)
+            self.is_float = False
+
+        for index, date_format in enumerate(self.DATE_FORMATS):
+            if self.date_formats_valid[index]:
+                try:
+                    datetime.strptime(value, date_format)
+                except ValueError:
+                    self.date_formats_valid[index] = False
+
+    def _record_invalid_numeric(self, value: str) -> None:
+        self.invalid_numeric_count += 1
+
+        if len(self.invalid_numeric_examples) < 3:
+            self.invalid_numeric_examples.append(value)
+
+    def infer_type(self) -> str:
+        if self.value_count == 0:
+            return "unknown"
+        if self.is_boolean:
+            return "boolean"
+        if self.is_integer:
+            return "integer"
+        if self.is_float:
+            return "float"
+        if any(self.date_formats_valid):
+            return "date"
+        return "string"
+
+    def get_inconsistent_numeric_values(self) -> tuple[int, list[str]]:
+        if (
+            self.numeric_count > 0
+            and self.invalid_numeric_count > 0
+            and self.numeric_count / self.value_count >= 0.75
+        ):
+            return (
+                self.invalid_numeric_count,
+                self.invalid_numeric_examples,
+            )
+
+        return 0, []
+
 class DatasetService:
     """Business logic for dataset validation and storage."""
 
@@ -512,8 +600,8 @@ class DatasetService:
                     )
 
                 column_names = reader.fieldnames
-                column_values = {
-                    column: [] for column in column_names
+                column_states = {
+                    column: ColumnProfilingState() for column in column_names
                 }
                 row_signatures: Counter[tuple[str | None, ...]] = Counter()
 
@@ -539,7 +627,7 @@ class DatasetService:
                         if self._is_missing(value):
                             missing_cells += 1
                         else:
-                            column_values[column].append(value.strip())
+                            column_states[column].add_value(value)
 
         except (
             UnicodeDecodeError,
@@ -554,11 +642,11 @@ class DatasetService:
         issues: list[DatasetValidationIssue] = []
 
         for column in column_names:
-            values = column_values[column]
+            state = column_states[column]
 
-            missing_count = total_rows - len(values)
-            inferred_type = self._infer_column_type(values)
-            unique_count = len(set(values))
+            missing_count = total_rows - state.value_count
+            inferred_type = state.infer_type()
+            unique_count = len(state.unique_values)
 
             column_profiles.append(
                 DatasetColumnProfile(
@@ -596,7 +684,7 @@ class DatasetService:
                 )
             
             inconsistent_count, invalid_examples = (
-                self._get_inconsistent_numeric_values(values)
+                state.get_inconsistent_numeric_values()
             )
 
             if inconsistent_count:
