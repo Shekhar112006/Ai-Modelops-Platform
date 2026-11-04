@@ -370,17 +370,7 @@ class DatasetService:
 
         return list(result.scalars().all())
 
-    async def list_datasets(
-        self,
-        session: AsyncSession,
-    ) -> list[Dataset]:
-        """List datasets across all projects."""
 
-        result = await session.execute(
-            select(Dataset).order_by(Dataset.created_at.desc())
-        )
-
-        return list(result.scalars().all())
 
     async def get_dataset(
         self,
@@ -737,3 +727,22 @@ class DatasetService:
             columns=column_profiles,
             issues=issues,
         )
+    
+
+    async def list_datasets(
+        self,
+        session: AsyncSession,
+        limit: int | None = None,
+    ) -> list[Dataset]:
+        """List datasets across all projects."""
+
+        query = select(Dataset).order_by(
+            Dataset.created_at.desc()
+        )
+
+        if limit is not None:
+            query = query.limit(limit)
+
+        result = await session.execute(query)
+
+        return list(result.scalars().all())

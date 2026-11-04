@@ -286,17 +286,29 @@ function DatasetManagementPage() {
   }, [selectedDatasetId])
 
   useEffect(() => {
-    void loadProjects()
+    const timeoutId = window.setTimeout(() => {
+      void loadProjects()
+    }, 0)
+
+    return () => window.clearTimeout(timeoutId)
   }, [loadProjects])
 
   useEffect(() => {
-    void loadDatasets(selectedProjectId)
+    const timeoutId = window.setTimeout(() => {
+      void loadDatasets(selectedProjectId)
+    }, 0)
+
+    return () => window.clearTimeout(timeoutId)
   }, [selectedProjectId, loadDatasets])
 
   useEffect(() => {
     // A report belongs to one dataset only.
-    setValidationReport(null)
-    void loadPreview(selectedDatasetId)
+    const timeoutId = window.setTimeout(() => {
+      setValidationReport(null)
+      void loadPreview(selectedDatasetId)
+    }, 0)
+
+    return () => window.clearTimeout(timeoutId)
   }, [selectedDatasetId, loadPreview])
 
   async function uploadDataset(event: React.FormEvent<HTMLFormElement>) {
@@ -398,7 +410,7 @@ function DatasetManagementPage() {
               {loadingDatasets
                 ? '…'
                 : datasets.reduce((sum, item) => sum + item.row_count, 0)
-                    .toLocaleString()}
+                  .toLocaleString()}
             </strong>
             <small>Across available datasets</small>
           </div>
@@ -793,11 +805,10 @@ function DatasetManagementPage() {
               </div>
 
               <span
-                className={`dataset-validation-badge ${
-                  validationReport.is_valid
-                    ? 'dataset-validation-badge-complete'
-                    : 'dataset-validation-badge-failed'
-                }`}
+                className={`dataset-validation-badge ${validationReport.is_valid
+                  ? 'dataset-validation-badge-complete'
+                  : 'dataset-validation-badge-failed'
+                  }`}
               >
                 {validationReport.is_valid
                   ? '✓ Analysis completed'

@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.app.api import (
+    activity,
     datasets,
     deployment,
     health,
@@ -108,6 +109,12 @@ app.include_router(
     datasets.router,
     prefix="/api/v1",
     tags=["datasets"],
+)
+
+app.include_router(
+    activity.router,
+    prefix="/api/v1/activity",
+    tags=["activity"],
 )
 
 @app.get("/")

@@ -143,11 +143,19 @@ function DeploymentPage() {
   }, [])
 
   useEffect(() => {
-    void loadProjects()
+    const timeoutId = window.setTimeout(() => {
+      void loadProjects()
+    }, 0)
+
+    return () => window.clearTimeout(timeoutId)
   }, [loadProjects])
 
   useEffect(() => {
-    void loadDeployments(selectedProjectId)
+    const timeoutId = window.setTimeout(() => {
+      void loadDeployments(selectedProjectId)
+    }, 0)
+
+    return () => window.clearTimeout(timeoutId)
   }, [selectedProjectId, loadDeployments])
 
   const totalDeployments = deployments.length

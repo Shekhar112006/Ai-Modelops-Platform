@@ -202,3 +202,20 @@ class DeploymentRepository:
                 traffic_percentage=traffic_percentage,
             )
         )
+
+    async def list_recent(
+        self,
+        session: AsyncSession,
+        limit: int = 10,
+    ) -> list[Deployment]:
+        """Return the most recently created deployments."""
+
+        result = await session.execute(
+            select(Deployment)
+            .order_by(
+                Deployment.created_at.desc()
+            )
+            .limit(limit)
+        )
+
+        return list(result.scalars().all())

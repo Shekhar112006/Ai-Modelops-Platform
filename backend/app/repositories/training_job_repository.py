@@ -71,3 +71,21 @@ class TrainingJobRepository:
             .where(TrainingJob.id == job_id)
             .values(celery_task_id=task_id)
         )
+
+
+    async def list_recent(
+        self,
+        session: AsyncSession,
+        limit: int = 10,
+    ) -> list[TrainingJob]:
+        """Return the most recently created training jobs."""
+
+        result = await session.execute(
+            select(TrainingJob)
+            .order_by(
+                TrainingJob.created_at.desc()
+            )
+            .limit(limit)
+        )
+
+        return list(result.scalars().all())

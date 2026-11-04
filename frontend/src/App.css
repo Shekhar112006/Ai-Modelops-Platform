@@ -323,6 +323,16 @@
   box-shadow: 0 0 7px rgba(210, 166, 95, 0.16);
 }
 
+.status-dot-success {
+  background: #35c98a;
+  box-shadow: 0 0 7px rgba(53, 201, 138, 0.25);
+}
+
+.status-dot-error {
+  background: #ef6464;
+  box-shadow: 0 0 7px rgba(239, 100, 100, 0.25);
+}
+
 .icon-button {
   display: grid;
   width: 31px;
@@ -1021,5 +1031,106 @@
     transition-duration: 0.01ms !important;
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
+  }
+}
+
+/* Recent activity feed */
+
+.activity-list {
+  display: flex;
+  min-height: 268px;
+  flex-direction: column;
+}
+
+.activity-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 15px 19px;
+  border-bottom: 1px solid var(--border);
+}
+
+.activity-item:last-child {
+  border-bottom: 0;
+}
+
+.activity-icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  place-items: center;
+  border: 1px solid #34334f;
+  border-radius: 10px;
+  background: rgba(139, 131, 255, 0.08);
+  color: #aaa3ff;
+  font-size: 15px;
+}
+
+.activity-details {
+  min-width: 0;
+  flex: 1;
+}
+
+.activity-details strong {
+  color: #d7deeb;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.activity-details p {
+  margin: 4px 0;
+  color: #9aa6ba;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.activity-details small {
+  color: #77849a;
+  font-size: 9px;
+}
+
+.activity-status {
+  flex-shrink: 0;
+  padding: 4px 7px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: #9aa6ba;
+  font-size: 9px;
+  text-transform: capitalize;
+}
+
+.activity-status-completed,
+.activity-status-healthy,
+.activity-status-active {
+  color: #65d6a0;
+  border-color: rgba(101, 214, 160, 0.25);
+  background: rgba(101, 214, 160, 0.07);
+}
+
+.activity-status-failed,
+.activity-status-unhealthy {
+  color: #ff8585;
+  border-color: rgba(255, 133, 133, 0.25);
+  background: rgba(255, 133, 133, 0.07);
+}
+
+.activity-status-running,
+.activity-status-pending,
+.activity-status-queued {
+  color: #c0baff;
+  border-color: rgba(170, 163, 255, 0.25);
+  background: rgba(170, 163, 255, 0.07);
+}
+
+@media (max-width: 760px) {
+  .activity-item {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    padding: 13px;
+  }
+
+  .activity-status {
+    margin-left: 46px;
   }
 }

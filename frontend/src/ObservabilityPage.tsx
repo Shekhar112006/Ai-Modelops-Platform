@@ -290,13 +290,18 @@ function ObservabilityPage() {
   }, [])
 
   useEffect(() => {
-    void refresh()
+    const timeoutId = window.setTimeout(() => {
+      void refresh()
+    }, 0)
 
     const intervalId = window.setInterval(() => {
       void refresh()
     }, 15000)
 
-    return () => window.clearInterval(intervalId)
+    return () => {
+      window.clearTimeout(timeoutId)
+      window.clearInterval(intervalId)
+    }
   }, [refresh])
 
   const errorRate = data.totalRequests > 0

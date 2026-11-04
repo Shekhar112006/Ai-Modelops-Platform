@@ -34,19 +34,71 @@ const navigation = [
   },
 ]
 
-const metrics = [
-  { label: 'Projects', icon: '▦', value: '—', note: 'Waiting for API data' },
-  { label: 'Training jobs', icon: '⚙', value: '—', note: 'Waiting for API data' },
-  { label: 'Registered models', icon: '◈', value: '—', note: 'Waiting for API data' },
-  { label: 'Deployments', icon: '⇧', value: '—', note: 'Waiting for API data' },
-]
+type Activity = {
+  id: string
+  event_type: 'project' | 'dataset' | 'training' | 'deployment'
+  title: string
+  description: string
+  status: string
+  project_name: string
+  timestamp: string
+}
+
+type OverviewMetrics = {
+  projects: number | null
+  trainingJobs: number | null
+  registeredModels: number | null
+  deployments: number | null
+}
+
+const initialOverviewMetrics: OverviewMetrics = {
+  projects: null,
+  trainingJobs: null,
+  registeredModels: null,
+  deployments: null,
+}
+
+type ServiceHealth = {
+  api: string
+  postgresql: string
+  redis: string
+  model_server: string
+}
+
+type ServiceHealthResponse = {
+  status: string
+  services: ServiceHealth
+}
+
+const initialServiceHealth: ServiceHealth = {
+  api: 'unknown',
+  postgresql: 'unknown',
+  redis: 'unknown',
+  model_server: 'unknown',
+}
 
 const services = [
-  { name: 'Platform API', detail: 'Control plane' },
-  { name: 'PostgreSQL', detail: 'Metadata and records' },
-  { name: 'Redis', detail: 'Cache and task queue' },
-  { name: 'Model server', detail: 'Inference service' },
-]
+  {
+    name: 'Platform API',
+    detail: 'Control plane',
+    key: 'api',
+  },
+  {
+    name: 'PostgreSQL',
+    detail: 'Metadata and records',
+    key: 'postgresql',
+  },
+  {
+    name: 'Redis',
+    detail: 'Cache and task queue',
+    key: 'redis',
+  },
+  {
+    name: 'Model server',
+    detail: 'Inference service',
+    key: 'model_server',
+  },
+] as const
 
 const API_BASE_URL = (
   import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'
@@ -54,8 +106,232 @@ const API_BASE_URL = (
 
 function App() {
   const [activePage, setActivePage] = useState('Overview')
+  const [activities, setActivities] = useState<Activity[]>([])
+  const [activityLoading, setActivityLoading] = useState(true)
+  const [activityError, setActivityError] = useState<string | null>(null)
   const [apiConnected, setApiConnected] = useState(false)
+  const [overviewMetrics, setOverviewMetrics] =
+    useState<OverviewMetrics>(initialOverviewMetrics)
 
+  const [metricsLoading, setMetricsLoading] = useState(true)
+  const [metricsError, setMetricsError] = useState<string | null>(null)
+  const [serviceHealth, setServiceHealth] =
+    useState<ServiceHealth>(initialServiceHealth)
+
+  const [serviceHealthLoading, setServiceHealthLoading] =
+    useState(true)
+
+  const [serviceHealthError, setServiceHealthError] =
+    useState<string | null>(null)
+  useEffect(() => {
+    let cancelled = false
+
+    type ProjectSummary = {
+      id: string
+    }
+
+    type RegistryResponse = {
+      models: unknown[]
+      total: number
+    }
+
+    const getJson = async <T,>(url: string): Promise<T> => {
+      const response = await fetch(`${API_BASE_URL}${url}`)
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${url}`)
+      }
+
+      return response.json() as Promise<T>
+    }
+
+    const loadOverviewMetrics = async () => {
+      if (!cancelled) {
+        setMetricsLoading(true)
+        setMetricsError(null)
+      }
+
+      const [projectsResult, registryResult] = await Promise.allSettled([
+        getJson<ProjectSummary[]>('/api/v1/projects'),
+        getJson<RegistryResponse>('/api/v1/registry/models'),
+      ])
+
+
+      let projectsCount: number | null = null
+      let trainingJobsCount: number | null = null
+      let deploymentsCount: number | null = null
+      let registeredModelsCount: number | null = null
+
+      const errors: string[] = []
+
+      if (projectsResult.status === 'fulfilled') {
+        const projects = projectsResult.value
+        projectsCount = projects.length
+
+        const projectResults = await Promise.all(
+          projects.map(async (project) => {
+            const [jobsResult, deploymentsResult] =
+              await Promise.allSettled([
+                getJson<unknown[]>(
+                  `/api/v1/projects/${project.id}/training-jobs`,
+                ),
+                getJson<unknown[]>(
+                  `/api/v1/projects/${project.id}/deployments`,
+                ),
+              ])
+
+            return { jobsResult, deploymentsResult }
+          }),
+        )
+
+        let totalJobs = 0
+        let totalDeployments = 0
+        let jobsComplete = true
+        let deploymentsComplete = true
+
+        for (const result of projectResults) {
+          if (result.jobsResult.status === 'fulfilled') {
+            totalJobs += result.jobsResult.value.length
+          } else {
+            jobsComplete = false
+          }
+
+          if (result.deploymentsResult.status === 'fulfilled') {
+            totalDeployments += result.deploymentsResult.value.length
+          } else {
+            deploymentsComplete = false
+          }
+        }
+
+        trainingJobsCount = jobsComplete ? totalJobs : null
+        deploymentsCount = deploymentsComplete ? totalDeployments : null
+
+        if (!jobsComplete) errors.push('Some training job data could not load.')
+        if (!deploymentsComplete) errors.push('Some deployment data could not load.')
+      } else {
+        errors.push('Project data could not load.')
+      }
+
+      if (registryResult.status === 'fulfilled') {
+        registeredModelsCount = registryResult.value.total
+      } else {
+        errors.push('Model registry data could not load.')
+      }
+
+      if (cancelled) return
+
+      setOverviewMetrics({
+        projects: projectsCount,
+        trainingJobs: trainingJobsCount,
+        registeredModels: registeredModelsCount,
+        deployments: deploymentsCount,
+      })
+
+      setMetricsError(errors.length > 0 ? errors.join(' ') : null)
+      setMetricsLoading(false)
+    }
+
+    void loadOverviewMetrics()
+
+    const intervalId = window.setInterval(() => {
+      void loadOverviewMetrics()
+    }, 30000)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(intervalId)
+    }
+  }, [])
+
+
+    // Service health monitoring
+  useEffect(() => {
+    let cancelled = false
+
+    const loadServiceHealth = async () => {
+      try {
+        const response = await fetch(
+          `${API_BASE_URL}/health/services`,
+        )
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`)
+        }
+
+        const result: ServiceHealthResponse = await response.json()
+
+        if (!cancelled) {
+          setServiceHealth(result.services)
+          setServiceHealthError(null)
+        }
+      } catch {
+        if (!cancelled) {
+          setServiceHealthError(
+            'Unable to retrieve service health.',
+          )
+        }
+      } finally {
+        if (!cancelled) {
+          setServiceHealthLoading(false)
+        }
+      }
+    }
+
+    void loadServiceHealth()
+
+    const intervalId = window.setInterval(() => {
+      void loadServiceHealth()
+    }, 30000)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(intervalId)
+    }
+  }, [])
+  // Recent activity monitoring
+  useEffect(() => {
+    let cancelled = false
+
+    const loadActivities = async () => {
+      try {
+        const response = await fetch(
+          `${API_BASE_URL}/api/v1/activity?limit=10`,
+        )
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`)
+        }
+
+        const result: Activity[] = await response.json()
+
+        if (!cancelled) {
+          setActivities(result)
+          setActivityError(null)
+        }
+      } catch {
+        if (!cancelled) {
+          setActivityError('Unable to retrieve recent activity.')
+        }
+      } finally {
+        if (!cancelled) {
+          setActivityLoading(false)
+        }
+      }
+    }
+
+    void loadActivities()
+
+    const intervalId = window.setInterval(() => {
+      void loadActivities()
+    }, 30000)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(intervalId)
+    }
+  }, [])
+
+  // API liveness monitoring
   useEffect(() => {
     let cancelled = false
 
@@ -67,9 +343,13 @@ function App() {
           throw new Error(`Health check failed: HTTP ${response.status}`)
         }
 
-        if (!cancelled) setApiConnected(true)
+        if (!cancelled) {
+          setApiConnected(true)
+        }
       } catch {
-        if (!cancelled) setApiConnected(false)
+        if (!cancelled) {
+          setApiConnected(false)
+        }
       }
     }
 
@@ -205,16 +485,47 @@ function App() {
           {isOverview ? (
             <>
               <section className="metrics-grid" aria-label="Platform metrics">
-                {metrics.map((metric) => (
+                {[
+                  {
+                    label: 'Projects',
+                    icon: '▦',
+                    value: overviewMetrics.projects,
+                  },
+                  {
+                    label: 'Training jobs',
+                    icon: '⚙',
+                    value: overviewMetrics.trainingJobs,
+                  },
+                  {
+                    label: 'Registered models',
+                    icon: '◈',
+                    value: overviewMetrics.registeredModels,
+                  },
+                  {
+                    label: 'Deployments',
+                    icon: '⇧',
+                    value: overviewMetrics.deployments,
+                  },
+                ].map((metric) => (
                   <article className="metric-card" key={metric.label}>
                     <div className="metric-topline">
                       <span className="metric-label">{metric.label}</span>
-                      <span className="metric-icon" aria-hidden="true">{metric.icon}</span>
+                      <span className="metric-icon" aria-hidden="true">
+                        {metric.icon}
+                      </span>
                     </div>
-                    <div className="metric-value">{metric.value}</div>
+
+                    <div className="metric-value">
+                      {metricsLoading ? '...' : metric.value ?? '—'}
+                    </div>
+
                     <div className="metric-note">
                       <span className="status-dot status-dot-muted" />
-                      {metric.note}
+                      {metricsLoading
+                        ? 'Loading platform data'
+                        : metricsError
+                          ? 'Data may be incomplete'
+                          : 'Live platform data'}
                     </div>
                   </article>
                 ))}
@@ -227,7 +538,17 @@ function App() {
                       <h2>Platform services</h2>
                       <p>Infrastructure components used by the platform</p>
                     </div>
-                    <span className="subtle-tag">LIVE CHECK PENDING</span>
+                    <span className="subtle-tag">
+                      {serviceHealthLoading
+                        ? 'CHECKING SERVICES'
+                        : serviceHealthError
+                          ? 'CHECK UNAVAILABLE'
+                          : Object.values(serviceHealth).every(
+                              (value) => value === 'healthy',
+                            )
+                            ? 'ALL SYSTEMS OPERATIONAL'
+                            : 'SERVICE DEGRADED'}
+                    </span>
                   </div>
 
                   <div className="service-list">
@@ -243,14 +564,32 @@ function App() {
                           <small>{service.detail}</small>
                         </div>
                         <span className="service-status">
-                          <span className="status-dot status-dot-muted" />
-                          Not checked
+                          <span
+                            className={`status-dot ${
+                              serviceHealth[service.key] === 'healthy'
+                                ? 'status-dot-success'
+                                : serviceHealth[service.key] === 'unhealthy'
+                                  ? 'status-dot-error'
+                                  : 'status-dot-muted'
+                            }`}
+                          />
+                          {serviceHealthLoading
+                            ? 'Checking'
+                            : serviceHealthError
+                              ? 'Unavailable'
+                              : serviceHealth[service.key] === 'healthy'
+                                ? 'Healthy'
+                                : serviceHealth[service.key] === 'unhealthy'
+                                  ? 'Unhealthy'
+                                  : 'Unknown'}
                         </span>
                       </div>
                     ))}
                   </div>
                   <div className="panel-footnote">
-                    Service health will appear here after API integration.
+                    {serviceHealthError
+                      ? serviceHealthError
+                      : 'Service health refreshes automatically every 30 seconds.'}
                   </div>
                 </article>
 
@@ -269,13 +608,52 @@ function App() {
                     </button>
                   </div>
 
-                  <div className="empty-state">
-                    <div className="empty-state-icon" aria-hidden="true">⌁</div>
-                    <h3>No activity to display</h3>
-                    <p>
-                      Events will appear when the dashboard is connected
-                      to your platform APIs.
-                    </p>
+                  <div className="activity-list">
+                    {activityLoading ? (
+                      <div className="empty-state">
+                        <h3>Loading activity...</h3>
+                        <p>Retrieving the latest platform events.</p>
+                      </div>
+                    ) : activityError ? (
+                      <div className="empty-state">
+                        <div className="empty-state-icon" aria-hidden="true">!</div>
+                        <h3>Activity unavailable</h3>
+                        <p>{activityError}</p>
+                      </div>
+                    ) : activities.length === 0 ? (
+                      <div className="empty-state">
+                        <div className="empty-state-icon" aria-hidden="true">⌁</div>
+                        <h3>No activity yet</h3>
+                        <p>Platform events will appear here as you use your workspace.</p>
+                      </div>
+                    ) : (
+                      activities.map((activity) => (
+                        <div className="activity-item" key={`${activity.event_type}-${activity.id}`}>
+                          <div className={`activity-icon activity-icon-${activity.event_type}`}>
+                            {activity.event_type === 'project'
+                              ? '▦'
+                              : activity.event_type === 'dataset'
+                                ? '▤'
+                                : activity.event_type === 'training'
+                                  ? '⚙'
+                                  : '⇧'}
+                          </div>
+
+                          <div className="activity-details">
+                            <strong>{activity.title}</strong>
+                            <p>{activity.description}</p>
+                            <small>
+                              {activity.project_name} ·{' '}
+                              {new Date(activity.timestamp).toLocaleString()}
+                            </small>
+                          </div>
+
+                          <span className={`activity-status activity-status-${activity.status.toLowerCase()}`}>
+                            {activity.status}
+                          </span>
+                        </div>
+                      ))
+                    )}
                   </div>
                 </article>
               </section>
