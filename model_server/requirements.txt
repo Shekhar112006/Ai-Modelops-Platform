@@ -7,3 +7,4 @@ scikit-learn==1.9.1
 scipy==1.18.1
 
 skops==0.14.0
+prometheus-client==0.26.0

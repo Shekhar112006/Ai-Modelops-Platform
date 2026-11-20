@@ -12,3 +12,10 @@ docs
 ml/data
 backend
 worker
+
+# Include only the reference dataset required by model drift detection.
+!ml/data/
+ml/data/*
+!ml/data/raw/
+ml/data/raw/*
+!ml/data/raw/demo_dataset.csv

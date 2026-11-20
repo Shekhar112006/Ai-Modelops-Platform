@@ -30,6 +30,17 @@ type ObservationData = {
   services: ServiceHealth[]
   metricsAvailable: boolean
   metricsError: string | null
+  prometheusAvailable: boolean
+  prometheusTargetsUp: number | null
+  prometheusTargetsTotal: number | null
+  modelPredictions: number
+  modelInferenceLatencyMs: number | null
+  driftChecks: number
+  driftDetections: number
+  driftedFeatures: number
+  celeryExecutions: number
+  celeryFailures: number
+  celeryTasksInProgress: number
   refreshedAt: Date | null
 }
 
@@ -48,6 +59,17 @@ const initialData: ObservationData = {
   ],
   metricsAvailable: false,
   metricsError: null,
+  prometheusAvailable: false,
+  prometheusTargetsUp: null,
+  prometheusTargetsTotal: null,
+  modelPredictions: 0,
+  modelInferenceLatencyMs: null,
+  driftChecks: 0,
+  driftDetections: 0,
+  driftedFeatures: 0,
+  celeryExecutions: 0,
+  celeryFailures: 0,
+  celeryTasksInProgress: 0,
   refreshedAt: null,
 }
 
@@ -159,10 +181,24 @@ function ObservabilityPage() {
     if (manual) setRefreshing(true)
 
     try {
-      const [liveResult, readyResult, metricsResult] = await Promise.allSettled([
+      const [
+        liveResult,
+        readyResult,
+        metricsResult,
+        prometheusTargetsResult,
+        prometheusMetricsResult,
+      ] = await Promise.allSettled([
         fetch(`${API_BASE_URL}/health/live`, { cache: 'no-store' }),
         fetch(`${API_BASE_URL}/health/ready`, { cache: 'no-store' }),
         fetch(`${API_BASE_URL}/metrics`, { cache: 'no-store' }),
+        fetch('/prometheus/api/v1/targets', { cache: 'no-store' }),
+        fetch(
+          '/prometheus/api/v1/query?query=' +
+          encodeURIComponent(
+            '{__name__=~"modelops_model_server_predictions_total|modelops_model_server_inference_duration_seconds_count|modelops_model_server_inference_duration_seconds_sum|modelops_model_server_drift_checks_total|modelops_model_server_drifted_features_count|modelops_model_server_drifted_features_sum|modelops_celery_task_executions_total|modelops_celery_task_failures_total|modelops_celery_tasks_in_progress"}',
+          ),
+          { cache: 'no-store' },
+        ),
       ])
 
       const liveHealthy =
@@ -187,6 +223,98 @@ function ObservabilityPage() {
           ? 'Could not connect to the metrics endpoint.'
           : `Metrics endpoint returned HTTP ${metricsResult.value.status}.`
       }
+
+      let prometheusSamples: MetricSample[] = []
+      let prometheusTargetsUp: number | null = null
+      let prometheusTargetsTotal: number | null = null
+      let prometheusAvailable = false
+
+      if (
+        prometheusTargetsResult.status === 'fulfilled' &&
+        prometheusTargetsResult.value.ok &&
+        prometheusMetricsResult.status === 'fulfilled' &&
+        prometheusMetricsResult.value.ok
+      ) {
+        try {
+          const [targetsPayload, metricsPayload] = await Promise.all([
+            prometheusTargetsResult.value.json(),
+            prometheusMetricsResult.value.json(),
+          ])
+
+          const targets = targetsPayload?.data?.activeTargets
+          const results = metricsPayload?.data?.result
+
+          if (Array.isArray(targets) && Array.isArray(results)) {
+            prometheusTargetsTotal = targets.length
+            prometheusTargetsUp = targets.filter(
+              (target: { health?: string }) => target.health === 'up',
+            ).length
+
+            prometheusSamples = results.flatMap(
+              (item: {
+                metric?: Record<string, string>
+                value?: [number, string]
+              }) => {
+                if (!item.metric || !item.value) return []
+                const { __name__: name, ...labels } = item.metric
+                const value = Number(item.value[1])
+                return name && Number.isFinite(value)
+                  ? [{ name, labels, value }]
+                  : []
+              },
+            )
+            prometheusAvailable = true
+          }
+        } catch {
+          prometheusAvailable = false
+        }
+      }
+
+      const modelPredictions = sumMetric(
+        prometheusSamples,
+        'modelops_model_server_predictions_total',
+      )
+
+      const inferenceCount = sumMetric(
+        prometheusSamples,
+        'modelops_model_server_inference_duration_seconds_count',
+      )
+
+      const inferenceSum = sumMetric(
+        prometheusSamples,
+        'modelops_model_server_inference_duration_seconds_sum',
+      )
+
+      const driftChecks = sumMetric(
+        prometheusSamples,
+        'modelops_model_server_drift_checks_total',
+      )
+
+      const driftDetections = sumMetric(
+        prometheusSamples,
+        'modelops_model_server_drift_checks_total',
+        (sample) => sample.labels.outcome === 'drift_detected',
+      )
+
+      const driftedFeatures = sumMetric(
+        prometheusSamples,
+        'modelops_model_server_drifted_features_sum',
+      )
+
+      const celeryExecutions = sumMetric(
+        prometheusSamples,
+        'modelops_celery_task_executions_total',
+      )
+
+      const celeryFailures = sumMetric(
+        prometheusSamples,
+        'modelops_celery_task_failures_total',
+      )
+
+      const celeryTasksInProgress = sumMetric(
+        prometheusSamples,
+        'modelops_celery_tasks_in_progress',
+      )
 
       const totalRequests = sumMetric(samples, 'modelops_http_requests_total')
       const totalErrors = sumMetric(samples, 'modelops_http_request_errors_total')
@@ -273,6 +401,19 @@ function ObservabilityPage() {
         ],
         metricsAvailable,
         metricsError,
+        prometheusAvailable,
+        prometheusTargetsUp,
+        prometheusTargetsTotal,
+        modelPredictions,
+        modelInferenceLatencyMs: inferenceCount > 0
+          ? (inferenceSum / inferenceCount) * 1000
+          : null,
+        driftChecks,
+        driftDetections,
+        driftedFeatures,
+        celeryExecutions,
+        celeryFailures,
+        celeryTasksInProgress,
         refreshedAt: new Date(),
       })
 
@@ -396,6 +537,88 @@ function ObservabilityPage() {
             value={data.metricsAvailable ? formatLatency(data.averageLatencyMs) : '—'}
             note="FastAPI duration for POST /predictions"
             icon="◷"
+          />
+        </div>
+      </section>
+
+      <section className="obs-section">
+        <div className="obs-section-heading">
+          <div>
+            <h3>Model and drift monitoring</h3>
+            <p>Metrics collected from production and staging model servers.</p>
+          </div>
+          <StatusBadge
+            state={data.prometheusAvailable ? 'healthy' : 'unavailable'}
+          />
+        </div>
+
+        <div className="obs-metrics-grid">
+          <MetricCard
+            label="Model predictions"
+            value={data.prometheusAvailable ? formatCount(data.modelPredictions) : '—'}
+            note="Across scraped model servers"
+            icon="⌁"
+          />
+          <MetricCard
+            label="Average inference"
+            value={data.prometheusAvailable ? formatLatency(data.modelInferenceLatencyMs) : '—'}
+            note="Model-server inference duration"
+            icon="◷"
+          />
+          <MetricCard
+            label="Drift detections"
+            value={data.prometheusAvailable ? formatCount(data.driftDetections) : '—'}
+            note={`Detected in ${formatCount(data.driftChecks)} drift checks`}
+            icon="△"
+          />
+          <MetricCard
+            label="Drifted features"
+            value={data.prometheusAvailable ? formatCount(data.driftedFeatures) : '—'}
+            note="Total features flagged by drift checks"
+            icon="⌁"
+          />
+        </div>
+      </section>
+
+      <section className="obs-section">
+        <div className="obs-section-heading">
+          <div>
+            <h3>Background workers and collector</h3>
+            <p>Celery task activity and Prometheus scrape availability.</p>
+          </div>
+          <span className="obs-auto-refresh">
+            {data.prometheusTargetsUp !== null
+              ? `${data.prometheusTargetsUp}/${data.prometheusTargetsTotal} TARGETS UP`
+              : 'TARGET STATUS UNAVAILABLE'}
+          </span>
+        </div>
+
+        <div className="obs-metrics-grid">
+          <MetricCard
+            label="Celery executions"
+            value={data.prometheusAvailable ? formatCount(data.celeryExecutions) : '—'}
+            note="Recorded task executions"
+            icon="▶"
+          />
+          <MetricCard
+            label="Celery failures"
+            value={data.prometheusAvailable ? formatCount(data.celeryFailures) : '—'}
+            note="Recorded task failures"
+            icon="!"
+          />
+          <MetricCard
+            label="Tasks in progress"
+            value={data.prometheusAvailable ? formatCount(data.celeryTasksInProgress) : '—'}
+            note="Currently executing tasks"
+            icon="↻"
+          />
+          <MetricCard
+            label="Prometheus targets"
+            value={data.prometheusTargetsUp !== null
+              ? `${data.prometheusTargetsUp}/${data.prometheusTargetsTotal}`
+              : '—'}
+            note="Healthy scrape targets"
+            icon="◎"
           />
         </div>
       </section>
